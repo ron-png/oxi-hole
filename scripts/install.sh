@@ -30,6 +30,9 @@ REINSTALL=0
 UNINSTALL=0
 VERBOSE=0
 
+# Save original arguments before getopts consumes them
+ORIG_ARGS="$*"
+
 # ============================================================================
 # Colors and output helpers
 # ============================================================================
@@ -125,13 +128,13 @@ check_root() {
         fi
 
         if [ -f "$0" ] && [ "$0" != "sh" ] && [ "$0" != "bash" ] && [ "$0" != "-sh" ] && [ "$0" != "dash" ]; then
-            exec sudo sh "$0" "$@"
+            exec sudo sh "$0" $ORIG_ARGS
         else
             check_dependencies
             TMP_SCRIPT=$(mktemp)
             download "https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/master/scripts/install.sh" "$TMP_SCRIPT"
             trap 'rm -f "$TMP_SCRIPT"' EXIT
-            sudo sh "$TMP_SCRIPT" "$@"
+            sudo sh "$TMP_SCRIPT" $ORIG_ARGS
             exit $?
         fi
     fi
