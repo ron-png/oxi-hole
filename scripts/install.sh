@@ -279,18 +279,35 @@ get_latest_version() {
 do_install() {
     log_step "Installing Oxi-Hole"
 
-    # Check if already installed
-    if [ -f "${INSTALL_DIR}/${BINARY_NAME}" ] && [ "$REINSTALL" -eq 0 ]; then
-        CURRENT_VERSION=$("${INSTALL_DIR}/${BINARY_NAME}" --version 2>/dev/null || echo "unknown")
-        log_error "Oxi-Hole is already installed at ${INSTALL_DIR} (version: ${CURRENT_VERSION})"
-        log_error "Use -r to reinstall or -u to uninstall first."
-        exit 1
-    fi
-
     detect_os
     detect_arch
     check_dependencies
     get_latest_version
+
+    # Check if already installed, compare versions and update if necessary
+    if [ -f "${INSTALL_DIR}/${BINARY_NAME}" ] && [ "$REINSTALL" -eq 0 ]; then
+        CURRENT_VERSION=$("${INSTALL_DIR}/${BINARY_NAME}" --version 2>/dev/null || echo "unknown")
+        
+        # Extract version numbers
+        CV_NUM=$(echo "$CURRENT_VERSION" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || echo "0.0.0")
+        LV_NUM=$(echo "$VERSION" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || echo "0.0.0")
+
+        if [ "$CV_NUM" = "$LV_NUM" ]; then
+            log_info "Oxi-Hole is already installed and up to date (version: ${CV_NUM})"
+            exit 0
+        fi
+
+        # Compare versions backward/forward safely using sort -V if available
+        if command -v sort >/dev/null 2>&1 && printf '%s\n' "1" | sort -V >/dev/null 2>&1; then
+            HIGHEST=$(printf "%s\n%s" "$CV_NUM" "$LV_NUM" | sort -V | tail -n1)
+            if [ "$HIGHEST" = "$CV_NUM" ] && [ "$CV_NUM" != "$LV_NUM" ]; then
+                log_info "Oxi-Hole is already installed with a newer version (${CV_NUM}) than the latest release (${LV_NUM})."
+                exit 0
+            fi
+        fi
+
+        log_info "Updating Oxi-Hole from version ${CV_NUM} to ${LV_NUM}"
+    fi
 
     # Build download URL
     ARCHIVE_NAME="${BINARY_NAME}-${OS}-${ARCH}.tar.gz"
