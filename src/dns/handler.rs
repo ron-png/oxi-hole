@@ -132,7 +132,7 @@ fn build_safe_search_response(request: &Message, domain: &str, ip: Ipv4Addr) -> 
 
     let name = Name::from_ascii(domain).unwrap_or_default();
     let rdata = RData::A(ip.into());
-    let record = Record::from_rdata(name, 60, rdata);
+    let record = Record::from_rdata(name, 3600, rdata);
     response.add_answer(record);
 
     response
@@ -231,14 +231,17 @@ async fn build_cname_rewrite_response(
     // Add CNAME record: domain -> cname target
     let orig_name = Name::from_ascii(domain).unwrap_or_default();
     let cname_rdata = RData::CNAME(hickory_proto::rr::rdata::CNAME(target_name));
-    let cname_record = Record::from_rdata(orig_name, 60, cname_rdata);
+    let cname_record = Record::from_rdata(orig_name, 3600, cname_rdata);
     response.add_answer(cname_record);
 
     // Add address records from upstream resolution of the CNAME target
+    // Override TTL to match our CNAME TTL so the rewrite stays cached together
     for answer in upstream_resp.answers() {
         match (answer.data(), query_type) {
             (RData::A(_), RecordType::A) | (RData::AAAA(_), RecordType::AAAA) => {
-                response.add_answer(answer.clone());
+                let mut record = answer.clone();
+                record.set_ttl(3600);
+                response.add_answer(record);
             }
             _ => {}
         }

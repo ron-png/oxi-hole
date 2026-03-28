@@ -248,7 +248,26 @@ impl FeatureManager {
     async fn fetch_rules(url: &str) -> anyhow::Result<HashMap<String, SafeSearchTarget>> {
         let resp = reqwest::get(url).await?;
         let content = resp.text().await?;
-        Ok(parse_safe_search_rules(&content))
+        let mut rules = parse_safe_search_rules(&content);
+
+        // The upstream AdGuard list only covers www.youtube.com but not the bare
+        // youtube.com domain. Browsers that navigate to youtube.com bypass the
+        // rewrite entirely, so add the bare domain (and youtube-ui variants)
+        // when we detect YouTube rules are present.
+        if url == YOUTUBE_SAFE_SEARCH_LIST_URL {
+            let extra = [
+                "youtube.com",
+                "youtubekids.com",
+                "www.youtubekids.com",
+            ];
+            for domain in extra {
+                rules
+                    .entry(domain.to_string())
+                    .or_insert_with(|| SafeSearchTarget::Cname("restrictmoderate.youtube.com".to_string()));
+            }
+        }
+
+        Ok(rules)
     }
 }
 
