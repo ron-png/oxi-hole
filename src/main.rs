@@ -99,6 +99,7 @@ async fn main() -> anyhow::Result<()> {
     let stats = stats::Stats::new(10_000);
 
     // Start DNS server (all protocols)
+    let upstream_for_web = upstream.clone();
     let dns_server = dns::DnsServer::new(
         config.dns.clone(),
         blocklist_manager.clone(),
@@ -120,7 +121,7 @@ async fn main() -> anyhow::Result<()> {
         blocklist: blocklist_manager,
         stats,
         features: feature_manager,
-        upstreams: config.dns.upstreams.clone(),
+        upstream: upstream_for_web,
         auto_update: std::sync::Arc::new(tokio::sync::RwLock::new(config.system.auto_update)),
     };
 

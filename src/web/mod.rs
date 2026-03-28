@@ -1,4 +1,5 @@
 use crate::blocklist::BlocklistManager;
+use crate::dns::upstream::UpstreamForwarder;
 use crate::features::FeatureManager;
 use crate::stats::Stats;
 use axum::extract::State;
@@ -15,7 +16,7 @@ pub struct AppState {
     pub blocklist: BlocklistManager,
     pub stats: Stats,
     pub features: FeatureManager,
-    pub upstreams: Vec<String>,
+    pub upstream: UpstreamForwarder,
     pub auto_update: std::sync::Arc<tokio::sync::RwLock<bool>>,
 }
 
@@ -47,6 +48,8 @@ pub async fn run_web_server(listen: &str, state: AppState) -> anyhow::Result<()>
         )
         // Upstream info
         .route("/api/upstreams", get(api_upstreams))
+        .route("/api/upstreams/add", post(api_add_upstream))
+        .route("/api/upstreams/remove", post(api_remove_upstream))
         // System settings
         .route("/api/system/auto-update", get(api_get_auto_update))
         .route("/api/system/auto-update", post(api_set_auto_update))
@@ -211,7 +214,39 @@ async fn api_remove_blocklist_source(
 // ==================== Upstreams ====================
 
 async fn api_upstreams(State(state): State<AppState>) -> Json<Vec<String>> {
-    Json(state.upstreams.clone())
+    Json(state.upstream.get_upstream_labels())
+}
+
+#[derive(Deserialize)]
+struct UpstreamRequest {
+    upstream: String,
+}
+
+async fn api_add_upstream(
+    State(state): State<AppState>,
+    Json(req): Json<UpstreamRequest>,
+) -> StatusCode {
+    match state.upstream.add_upstream(&req.upstream) {
+        Ok(_) => {
+            info!("Added upstream: {}", req.upstream);
+            StatusCode::OK
+        }
+        Err(e) => {
+            tracing::warn!("Invalid upstream '{}': {}", req.upstream, e);
+            StatusCode::BAD_REQUEST
+        }
+    }
+}
+
+async fn api_remove_upstream(
+    State(state): State<AppState>,
+    Json(req): Json<UpstreamRequest>,
+) -> StatusCode {
+    if state.upstream.remove_upstream(&req.upstream) {
+        StatusCode::OK
+    } else {
+        StatusCode::NOT_FOUND
+    }
 }
 
 // ==================== System Settings ====================

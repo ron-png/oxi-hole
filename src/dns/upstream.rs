@@ -99,7 +99,7 @@ fn resolve_hostname(host: &str, port: u16) -> anyhow::Result<SocketAddr> {
 /// Handles forwarding DNS queries to upstream servers with multi-protocol support.
 #[derive(Clone)]
 pub struct UpstreamForwarder {
-    upstreams: Vec<UpstreamSpec>,
+    upstreams: Arc<std::sync::RwLock<Vec<UpstreamSpec>>>,
     timeout: Duration,
     tls_client_config: Arc<rustls::ClientConfig>,
     quic_client_config: quinn::ClientConfig,
@@ -129,7 +129,7 @@ impl UpstreamForwarder {
             anyhow::bail!("No valid upstream DNS servers configured");
         }
         Ok(Self {
-            upstreams,
+            upstreams: Arc::new(std::sync::RwLock::new(upstreams)),
             timeout: Duration::from_millis(timeout_ms),
             tls_client_config,
             quic_client_config,
@@ -146,6 +146,28 @@ impl UpstreamForwarder {
         self.use_root_servers.load(Ordering::Relaxed)
     }
 
+    pub fn get_upstream_labels(&self) -> Vec<String> {
+        self.upstreams.read().unwrap().iter().map(|u| u.label()).collect()
+    }
+
+    pub fn add_upstream(&self, s: &str) -> anyhow::Result<()> {
+        let spec = UpstreamSpec::parse(s)?;
+        tracing::info!("Adding upstream: {}", spec.label());
+        self.upstreams.write().unwrap().push(spec);
+        Ok(())
+    }
+
+    pub fn remove_upstream(&self, s: &str) -> bool {
+        let mut upstreams = self.upstreams.write().unwrap();
+        let before = upstreams.len();
+        upstreams.retain(|u| u.label() != s);
+        let removed = upstreams.len() < before;
+        if removed {
+            tracing::info!("Removed upstream: {}", s);
+        }
+        removed
+    }
+
     /// Forward a DNS query to upstream servers.
     /// When multiple upstreams are configured, queries all in parallel and
     /// returns the fastest successful response.
@@ -154,16 +176,18 @@ impl UpstreamForwarder {
             return self.forward_iterative(packet).await;
         }
 
-        if self.upstreams.len() == 1 {
-            let upstream = &self.upstreams[0];
+        let upstreams = self.upstreams.read().unwrap().clone();
+
+        if upstreams.len() == 1 {
+            let upstream = &upstreams[0];
             let response = self.forward_single(packet, upstream).await?;
             return Ok((response, upstream.label()));
         }
 
         // Query all upstreams in parallel, return the fastest success
-        let (tx, mut rx) = tokio::sync::mpsc::channel(self.upstreams.len());
+        let (tx, mut rx) = tokio::sync::mpsc::channel(upstreams.len());
 
-        for upstream in &self.upstreams {
+        for upstream in &upstreams {
             let tx = tx.clone();
             let forwarder = self.clone();
             let packet = packet.to_vec();
