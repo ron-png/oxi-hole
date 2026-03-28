@@ -11,12 +11,17 @@ use config::Config;
 use std::path::PathBuf;
 use tracing::info;
 
+const VERSION: &str = match option_env!("OXI_HOLE_VERSION") {
+    Some(v) => v,
+    None => env!("CARGO_PKG_VERSION"),
+};
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // Handle --version before anything else
     if let Some(arg) = std::env::args().nth(1) {
         if arg == "--version" || arg == "-V" {
-            println!("oxi-hole {}", env!("CARGO_PKG_VERSION"));
+            println!("oxi-hole {}", VERSION);
             return Ok(());
         }
     }
@@ -38,10 +43,7 @@ async fn main() -> anyhow::Result<()> {
 
     let config = Config::load(&config_path)?;
 
-    info!(
-        "Starting Oxi-Hole DNS server v{}",
-        env!("CARGO_PKG_VERSION")
-    );
+    info!("Starting Oxi-Hole DNS server v{}", VERSION);
     info!("DNS (UDP) listen: {}", config.dns.listen);
     if let Some(ref dot) = config.dns.dot_listen {
         info!("DNS-over-TLS listen: {}", dot);

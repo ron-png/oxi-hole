@@ -35,9 +35,11 @@ jobs:
         run: |
           # Strip 'v' prefix and everything after first '-' (e.g. v0.0.5b---docker -> 0.0.5b)
           VERSION=$(echo "$TAG" | sed 's/^v//' | sed 's/---.*//')
-          # Cargo.toml needs strict semver (MAJOR.MINOR.PATCH) — extract first 3 numeric parts
-          CARGO_VERSION=$(echo "$VERSION" | grep -oE '^[0-9]+\.[0-9]+\.[0-9]+')
-          CARGO_VERSION="${CARGO_VERSION:-$VERSION}"
+          # Cargo.toml needs strict semver (MAJOR.MINOR.PATCH)
+          # Extract numeric parts, pad to exactly 3 segments (e.g. "1" -> "1.0.0", "1.0" -> "1.0.0")
+          NUMS=$(echo "$VERSION" | grep -oE '^[0-9]+(\.[0-9]+)*')
+          IFS='.' read -r MAJOR MINOR PATCH _REST <<< "$NUMS"
+          CARGO_VERSION="${MAJOR:-0}.${MINOR:-0}.${PATCH:-0}"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "cargo_version=$CARGO_VERSION" >> "$GITHUB_OUTPUT"
           echo "Version: $VERSION (Cargo: $CARGO_VERSION)"
@@ -121,10 +123,14 @@ jobs:
       - name: Build (native)
         if: matrix.cross != true
         run: cargo build --release --target ${{ matrix.target }}
+        env:
+          OXI_HOLE_VERSION: ${{ needs.prepare.outputs.version }}
 
       - name: Build (cross)
         if: matrix.cross
         run: cross build --release --target ${{ matrix.target }}
+        env:
+          OXI_HOLE_VERSION: ${{ needs.prepare.outputs.version }}
 
       - name: Package (Unix)
         run: |
