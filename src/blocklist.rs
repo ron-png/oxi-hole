@@ -249,6 +249,15 @@ fn parse_blocklist(content: &str) -> Vec<String> {
             continue;
         }
 
+        // Wildcard format: *.domain.com -> domain.com
+        if let Some(domain) = line.strip_prefix("*.") {
+            let domain = domain.trim();
+            if is_valid_domain(domain) {
+                domains.push(normalize_domain(domain));
+                continue;
+            }
+        }
+
         // Adblock-style: ||domain.com^
         if let Some(rest) = line.strip_prefix("||") {
             if let Some(domain) = rest.strip_suffix('^') {
