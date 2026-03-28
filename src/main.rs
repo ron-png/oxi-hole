@@ -11,10 +11,7 @@ use config::Config;
 use std::path::PathBuf;
 use tracing::info;
 
-const VERSION: &str = match option_env!("OXI_HOLE_VERSION") {
-    Some(v) => v,
-    None => env!("CARGO_PKG_VERSION"),
-};
+const VERSION: &str = env!("OXIHOLE_VERSION");
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {

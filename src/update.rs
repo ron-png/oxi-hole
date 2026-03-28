@@ -3,10 +3,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{info, warn};
 
-const VERSION: &str = match option_env!("OXI_HOLE_VERSION") {
-    Some(v) => v,
-    None => env!("CARGO_PKG_VERSION"),
-};
+const VERSION: &str = env!("OXIHOLE_VERSION");
 const REPO_OWNER: &str = "ron-png";
 const REPO_NAME: &str = "oxi-hole";
 const CHECK_INTERVAL: std::time::Duration = std::time::Duration::from_secs(8 * 60 * 60); // 8 hours
