@@ -230,8 +230,7 @@ impl UpstreamForwarder {
                     if let RData::A(ip) = record.data() {
                         let name = record.name().to_ascii();
                         if ns_names.iter().any(|ns| ns == &name) {
-                            next_servers
-                                .push(SocketAddr::new(IpAddr::V4(ip.0), 53));
+                            next_servers.push(SocketAddr::new(IpAddr::V4(ip.0), 53));
                         }
                     }
                 }
