@@ -213,7 +213,7 @@ impl UpstreamForwarder {
                 .name_servers()
                 .iter()
                 .filter_map(|r| match r.data() {
-                    Some(RData::NS(ns)) => Some(ns.0.to_ascii()),
+                    RData::NS(ns) => Some(ns.0.to_ascii()),
                     _ => None,
                 })
                 .collect();
@@ -226,7 +226,7 @@ impl UpstreamForwarder {
             let mut next_servers = Vec::new();
             for record in response.additionals() {
                 if record.record_type() == RecordType::A {
-                    if let Some(RData::A(ip)) = record.data() {
+                    if let RData::A(ip) = record.data() {
                         let name = record.name().to_ascii();
                         if ns_names.iter().any(|ns| ns == &name) {
                             next_servers
