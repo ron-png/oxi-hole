@@ -1,6 +1,6 @@
 [package]
 name = "oxi-hole"
-version = "0.0.0-dev"
+version = "0.0.6"
 edition = "2021"
 description = "An AdGuardHome-style DNS sinkhole server written in Rust with DoT, DoH, and DoQ support"
 license = "MIT"
