@@ -384,7 +384,7 @@ do_install() {
     printf "  ${CYAN}Service:${NC}   ${SERVICE_NAME}\n"
     printf "\n"
     printf "  ${BOLD}Web Dashboard:${NC}  ${GREEN}http://$(hostname -I 2>/dev/null | awk '{print $1}' || echo 'localhost'):8080${NC}\n"
-    printf "  ${BOLD}DNS Server:${NC}     UDP port 5353 (change to 53 in config for production)\n"
+    printf "  ${BOLD}DNS Server:${NC}     UDP port 53\n"
     printf "\n"
     printf "  ${CYAN}Manage the service:${NC}\n"
     printf "    sudo systemctl status ${SERVICE_NAME}\n"
@@ -484,8 +484,8 @@ create_default_config() {
 # See: https://github.com/ron-png/oxi-hole
 
 [dns]
-# Plain DNS (UDP) - change to 0.0.0.0:53 for production use
-listen = "0.0.0.0:5353"
+# Plain DNS (UDP)
+listen = "0.0.0.0:53"
 
 # DNS-over-TLS (uncomment to enable)
 # dot_listen = "0.0.0.0:853"

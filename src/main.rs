@@ -130,9 +130,12 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
-    tokio::select! {
-        _ = dns_handle => {},
-        _ = web_handle => {},
+    let (dns_result, web_result) = tokio::join!(dns_handle, web_handle);
+    if let Err(e) = dns_result {
+        tracing::error!("DNS server task error: {}", e);
+    }
+    if let Err(e) = web_result {
+        tracing::error!("Web server task error: {}", e);
     }
 
     Ok(())

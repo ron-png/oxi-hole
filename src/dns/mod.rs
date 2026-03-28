@@ -115,8 +115,11 @@ impl DnsServer {
             }
         }
 
-        for handle in handles {
-            handle.await?;
+        let results = futures::future::join_all(handles).await;
+        for result in results {
+            if let Err(e) = result {
+                tracing::error!("Listener task error: {}", e);
+            }
         }
 
         Ok(())

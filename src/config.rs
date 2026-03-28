@@ -95,7 +95,7 @@ fn default_web() -> WebConfig {
 }
 
 fn default_dns_listen() -> String {
-    "0.0.0.0:5353".to_string()
+    "0.0.0.0:53".to_string()
 }
 
 fn default_web_listen() -> String {
