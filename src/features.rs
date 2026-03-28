@@ -223,7 +223,7 @@ impl FeatureManager {
         if let Some(url) = blocklist_url {
             if enabled {
                 info!("Enabling feature '{}', loading blocklist...", name);
-                self.blocklist.add_blocklist_source(&url).await;
+                let _ = self.blocklist.add_blocklist_source(&url).await;
             } else {
                 info!("Disabling feature '{}', removing blocklist...", name);
                 self.blocklist.remove_blocklist_source(&url).await;

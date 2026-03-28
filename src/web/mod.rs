@@ -76,8 +76,10 @@ pub async fn run_web_server(listen: &str, state: AppState) -> anyhow::Result<()>
         .route("/api/features", get(api_features))
         .route("/api/features/{id}", post(api_toggle_feature))
         // Domain management
+        .route("/api/blocklist/custom", get(api_custom_blocked))
         .route("/api/blocklist/add", post(api_add_blocked))
         .route("/api/blocklist/remove", post(api_remove_blocked))
+        .route("/api/allowlist", get(api_get_allowlist))
         .route("/api/allowlist/add", post(api_add_allowlisted))
         .route("/api/allowlist/remove", post(api_remove_allowlisted))
         // Blocklist source management
@@ -204,6 +206,18 @@ struct DomainRequest {
     domain: String,
 }
 
+async fn api_custom_blocked(State(state): State<AppState>) -> Json<Vec<String>> {
+    let mut domains = state.blocklist.get_custom_blocked().await;
+    domains.sort();
+    Json(domains)
+}
+
+async fn api_get_allowlist(State(state): State<AppState>) -> Json<Vec<String>> {
+    let mut domains = state.blocklist.get_allowlist().await;
+    domains.sort();
+    Json(domains)
+}
+
 async fn api_add_blocked(
     State(state): State<AppState>,
     Json(req): Json<DomainRequest>,
@@ -255,14 +269,30 @@ struct UrlRequest {
     url: String,
 }
 
+#[derive(Serialize)]
+struct BlocklistAddResponse {
+    success: bool,
+    message: String,
+}
+
 async fn api_add_blocklist_source(
     State(state): State<AppState>,
     Json(req): Json<UrlRequest>,
-) -> StatusCode {
-    state.blocklist.add_blocklist_source(&req.url).await;
-    info!("Added blocklist source: {}", req.url);
-    state.save_config().await;
-    StatusCode::OK
+) -> Json<BlocklistAddResponse> {
+    match state.blocklist.add_blocklist_source(&req.url).await {
+        Ok(count) => {
+            info!("Added blocklist source: {} ({} entries)", req.url, count);
+            state.save_config().await;
+            Json(BlocklistAddResponse {
+                success: true,
+                message: format!("Loaded {} domains", count),
+            })
+        }
+        Err(e) => Json(BlocklistAddResponse {
+            success: false,
+            message: e,
+        }),
+    }
 }
 
 async fn api_remove_blocklist_source(

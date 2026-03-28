@@ -853,8 +853,8 @@
                 <div class="add-domain">
                     <input type="text" id="domainInput" placeholder="e.g. ads.example.com" />
                     <button class="btn btn-accent" onclick="addBlocked()">Block</button>
-                    <button class="btn btn-danger" onclick="removeBlocked()">Unblock</button>
                 </div>
+                <ul class="upstream-list" id="customBlockedList"></ul>
             </div>
 
             <div class="section">
@@ -862,8 +862,8 @@
                 <div class="add-domain">
                     <input type="text" id="allowInput" placeholder="e.g. safe.example.com" />
                     <button class="btn btn-green" onclick="addAllowlisted()">Add to Allowlist</button>
-                    <button class="btn btn-danger" onclick="removeAllowlisted()">Remove</button>
                 </div>
+                <ul class="upstream-list" id="allowlistList"></ul>
             </div>
 
             <div class="section">
@@ -954,6 +954,8 @@
                 refreshBlocklistSources();
                 refreshSystemSettings();
                 refreshFeatures();
+                refreshCustomBlocked();
+                refreshAllowlist();
             }
         }
 
@@ -1084,20 +1086,39 @@
                 body: JSON.stringify({ domain })
             });
             input.value = '';
+            refreshCustomBlocked();
             refreshStats();
         }
 
-        async function removeBlocked() {
-            const input = document.getElementById('domainInput');
-            const domain = input.value.trim();
-            if (!domain) return;
+        async function removeCustomBlocked(domain) {
             await fetch('/api/blocklist/remove', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ domain })
             });
-            input.value = '';
+            refreshCustomBlocked();
             refreshStats();
+        }
+
+        async function refreshCustomBlocked() {
+            try {
+                const res = await fetch('/api/blocklist/custom');
+                const domains = await res.json();
+                const el = document.getElementById('customBlockedList');
+                el.textContent = '';
+                if (domains.length === 0) {
+                    const li = document.createElement('li');
+                    li.style.color = 'var(--text-muted)';
+                    li.textContent = 'No custom blocked domains.';
+                    el.appendChild(li);
+                } else {
+                    domains.forEach(d => {
+                        const li = document.createElement('li');
+                        li.innerHTML = `<span>${d}</span><button class="btn btn-danger btn-sm" onclick="removeCustomBlocked('${d}')">Remove</button>`;
+                        el.appendChild(li);
+                    });
+                }
+            } catch (e) { console.error(e); }
         }
 
         async function addAllowlisted() {
@@ -1110,18 +1131,37 @@
                 body: JSON.stringify({ domain })
             });
             input.value = '';
+            refreshAllowlist();
         }
 
-        async function removeAllowlisted() {
-            const input = document.getElementById('allowInput');
-            const domain = input.value.trim();
-            if (!domain) return;
+        async function removeAllowlisted(domain) {
             await fetch('/api/allowlist/remove', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ domain })
             });
-            input.value = '';
+            refreshAllowlist();
+        }
+
+        async function refreshAllowlist() {
+            try {
+                const res = await fetch('/api/allowlist');
+                const domains = await res.json();
+                const el = document.getElementById('allowlistList');
+                el.textContent = '';
+                if (domains.length === 0) {
+                    const li = document.createElement('li');
+                    li.style.color = 'var(--text-muted)';
+                    li.textContent = 'No allowlisted domains.';
+                    el.appendChild(li);
+                } else {
+                    domains.forEach(d => {
+                        const li = document.createElement('li');
+                        li.innerHTML = `<span>${d}</span><button class="btn btn-danger btn-sm" onclick="removeAllowlisted('${d}')">Remove</button>`;
+                        el.appendChild(li);
+                    });
+                }
+            } catch (e) { console.error(e); }
         }
 
         // ---- Advanced: Blocklist URLs ----
@@ -1129,11 +1169,19 @@
             const input = document.getElementById('blocklistUrlInput');
             const url = input.value.trim();
             if (!url) return;
-            await fetch('/api/blocklist-source/add', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ url })
-            });
+            try {
+                const res = await fetch('/api/blocklist-source/add', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ url })
+                });
+                const data = await res.json();
+                if (!data.success) {
+                    alert('Failed to add blocklist: ' + data.message);
+                }
+            } catch (e) {
+                alert('Failed to add blocklist: ' + e.message);
+            }
             input.value = '';
             refreshBlocklistSources();
             refreshStats();
@@ -1393,6 +1441,8 @@
         refreshStats();
         refreshQueries();
         refreshFeatures();
+        refreshCustomBlocked();
+        refreshAllowlist();
     </script>
 </body>
 

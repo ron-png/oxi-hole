@@ -69,22 +69,21 @@ impl BlocklistManager {
     }
 
     /// Dynamically add a blocklist source and load its domains.
-    pub async fn add_blocklist_source(&self, url: &str) {
+    /// Returns Ok(count) on success, Err(message) on failure.
+    pub async fn add_blocklist_source(&self, url: &str) -> Result<usize, String> {
         // Check if already loaded
         {
             let src = self.source_domains.read().await;
             if src.contains_key(url) {
-                return;
+                let count = src[url].len();
+                return Ok(count);
             }
         }
 
         match self.fetch_blocklist(url).await {
             Ok(entries) => {
-                info!(
-                    "Feature blocklist loaded: {} entries from {}",
-                    entries.len(),
-                    url
-                );
+                let count = entries.len();
+                info!("Blocklist loaded: {} entries from {}", count, url);
                 let set: HashSet<String> = entries.into_iter().collect();
 
                 // Add to blocked set
@@ -106,9 +105,13 @@ impl BlocklistManager {
                         sources.push(url.to_string());
                     }
                 }
+
+                Ok(count)
             }
             Err(e) => {
-                warn!("Failed to load feature blocklist {}: {}", url, e);
+                let msg = format!("Failed to load blocklist {}: {}", url, e);
+                warn!("{}", msg);
+                Err(msg)
             }
         }
     }
