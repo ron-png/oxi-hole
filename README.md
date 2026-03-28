@@ -3,7 +3,7 @@
 > [!WARNING]
 > This DNS server is currently in its early alpha stages. It is under active development and may be unstable. Do not use in production environments.
 
-**Oxi-Hole** is a high-performance, lightweight, and secure **DNS sinkhole server** written entirely in **Rust**. Designed as a modern alternative to Pi-hole and AdGuard Home, Oxi-Hole protects your network privacy by blocking ads, trackers, and malicious domains at the DNS level.
+**Oxi-Hole** is a high-performance, lightweight, and secure **DNS sinkhole server** written entirely in **Rust**. ("Oxi" stands for *oxidized*, because it is a DNS sinkhole written in Rust.) Designed as a modern alternative to Pi-hole and AdGuard Home, Oxi-Hole protects your network privacy by blocking ads, trackers, and malicious domains at the DNS level.
 
 With native support for standard and encrypted DNS protocols including **DNS-over-TLS (DoT)**, **DNS-over-HTTPS (DoH)**, and the cutting-edge **DNS-over-QUIC (DoQ)**, Oxi-Hole ensures your internet traffic remains private, secure, and remarkably fast.
 
