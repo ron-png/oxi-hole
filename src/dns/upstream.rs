@@ -199,9 +199,7 @@ impl UpstreamForwarder {
     ) -> anyhow::Result<Vec<u8>> {
         match upstream {
             UpstreamSpec::Udp(addr) => self.forward_udp(packet, *addr).await,
-            UpstreamSpec::Tls { addr, hostname } => {
-                self.forward_dot(packet, *addr, hostname).await
-            }
+            UpstreamSpec::Tls { addr, hostname } => self.forward_dot(packet, *addr, hostname).await,
             UpstreamSpec::Https { url } => self.forward_doh(packet, url).await,
             UpstreamSpec::Quic { addr, hostname } => {
                 self.forward_doq(packet, *addr, hostname).await
