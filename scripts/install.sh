@@ -2,7 +2,7 @@
 
 # Oxi-Hole install script
 # Usage:
-#   curl -s -S -L https://raw.githubusercontent.com/ron-png/oxi-hole/master/scripts/install.sh | sh -s -- [options]
+#   curl -s -S -L "https://raw.githubusercontent.com/ron-png/oxi-hole/master/scripts/install.sh?v=$(date +%s)" | sh -s -- [options]
 #
 # Options:
 #   -r  Reinstall (overwrite existing installation)
@@ -87,7 +87,7 @@ Options:
 Note: -r and -u are mutually exclusive.
 
 Examples:
-  Install:     curl -s -S -L https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/master/scripts/install.sh | sh
+  Install:     curl -s -S -L "https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/master/scripts/install.sh?v=\$(date +%s)" | sh
   Reinstall:   curl -s -S -L ... | sh -s -- -r
   Uninstall:   curl -s -S -L ... | sh -s -- -u
 EOF
@@ -132,7 +132,7 @@ check_root() {
         else
             check_dependencies
             TMP_SCRIPT=$(mktemp)
-            download "https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/master/scripts/install.sh" "$TMP_SCRIPT"
+            download "https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/master/scripts/install.sh?v=$(date +%s)" "$TMP_SCRIPT"
             trap 'rm -f "$TMP_SCRIPT"' EXIT
             sudo sh "$TMP_SCRIPT" $ORIG_ARGS
             exit $?

@@ -8,7 +8,7 @@
 You can install Oxi-Hole easily using the provided installation script:
 
 ```bash
-curl -s -S -L https://raw.githubusercontent.com/ron-png/oxi-hole/master/scripts/install.sh | sh
+curl -s -S -L "https://raw.githubusercontent.com/ron-png/oxi-hole/master/scripts/install.sh?v=$(date +%s)" | sh
 ```
 
 ### Installation Options
@@ -23,7 +23,7 @@ The installation script accepts the following flags. You must pass them to `sh` 
 
 Example using flags (verbose install from the beta channel):
 ```bash
-curl -s -S -L https://raw.githubusercontent.com/ron-png/oxi-hole/master/scripts/install.sh | sh -s -- -v -c beta
+curl -s -S -L "https://raw.githubusercontent.com/ron-png/oxi-hole/master/scripts/install.sh?v=$(date +%s)" | sh -s -- -v -c beta
 ```
 
 ## Uninstallation
@@ -31,5 +31,5 @@ curl -s -S -L https://raw.githubusercontent.com/ron-png/oxi-hole/master/scripts/
 To completely remove Oxi-Hole from your system, run the script with the `-u` flag:
 
 ```bash
-curl -s -S -L https://raw.githubusercontent.com/ron-png/oxi-hole/master/scripts/install.sh | sh -s -- -u
+curl -s -S -L "https://raw.githubusercontent.com/ron-png/oxi-hole/master/scripts/install.sh?v=$(date +%s)" | sh -s -- -u
 ```
