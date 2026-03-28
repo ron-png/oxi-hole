@@ -219,8 +219,23 @@
             color: #94a3b8;
             font-size: 0.85rem;
             font-family: monospace;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
         }
-        .upstream-list li::before { content: "→ "; color: #3b82f6; }
+        .upstream-list li .upstream-label::before { content: "→ "; color: #3b82f6; }
+        .upstream-list li .btn-remove {
+            background: transparent;
+            border: 1px solid #7f1d1d;
+            color: #fca5a5;
+            font-size: 0.7rem;
+            padding: 0.15rem 0.4rem;
+            border-radius: 0.25rem;
+            cursor: pointer;
+            margin-left: 0.5rem;
+            flex-shrink: 0;
+        }
+        .upstream-list li .btn-remove:hover { background: #7f1d1d; }
 
         .info-box {
             background: #0f172a;
@@ -338,13 +353,14 @@
             </div>
 
             <div class="section">
-                <h2>Custom Blocklist URL</h2>
+                <h2>Blocklist Sources</h2>
                 <div class="add-domain">
                     <input type="text" id="blocklistUrlInput" placeholder="https://example.com/blocklist.txt" />
                     <button class="btn btn-blue" onclick="addBlocklistUrl()">Add Blocklist</button>
-                    <button class="btn btn-red" onclick="removeBlocklistUrl()">Remove</button>
                 </div>
-                <div id="activeBlocklists" class="info-box">Loading...</div>
+                <ul class="upstream-list" id="activeBlocklists">
+                    <li>Loading...</li>
+                </ul>
                 <div style="display: flex; align-items: center; justify-content: space-between; margin-top: 0.75rem;">
                     <div>
                         <span style="font-size: 0.85rem; color: #94a3b8;">Auto-refresh interval: </span>
@@ -374,7 +390,6 @@
                     <div class="add-domain">
                         <input type="text" id="upstreamInput" placeholder="e.g. tls://1.1.1.1 or 8.8.8.8" />
                         <button class="btn btn-blue" onclick="addUpstream()">Add</button>
-                        <button class="btn btn-red" onclick="removeUpstream()">Remove</button>
                     </div>
                     <ul class="upstream-list" id="upstreamList">
                         <li>Loading...</li>
@@ -602,16 +617,32 @@
             refreshStats();
         }
 
-        async function removeBlocklistUrl() {
-            const input = document.getElementById('blocklistUrlInput');
-            const url = input.value.trim();
-            if (!url) return;
+        async function removeBlocklistSource(url) {
+            if (!confirm('Remove blocklist source?\n' + url)) return;
+
+            // Check if this URL belongs to a feature toggle — if so, disable the feature
+            try {
+                const res = await fetch('/api/features');
+                const features = await res.json();
+                const feature = features.find(f => f.blocklist_url === url && f.enabled);
+                if (feature) {
+                    await fetch('/api/features/' + feature.id, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ enabled: false })
+                    });
+                    await refreshFeatures();
+                    refreshBlocklistSources();
+                    refreshStats();
+                    return;
+                }
+            } catch(e) { console.error(e); }
+
             await fetch('/api/blocklist-source/remove', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ url })
             });
-            input.value = '';
             refreshBlocklistSources();
             refreshStats();
         }
@@ -621,17 +652,25 @@
                 const res = await fetch('/api/blocklist-sources');
                 const sources = await res.json();
                 const el = document.getElementById('activeBlocklists');
+                el.textContent = '';
                 if (sources.length === 0) {
-                    el.textContent = 'No custom blocklist URLs loaded.';
+                    const li = document.createElement('li');
+                    li.style.color = '#64748b';
+                    li.textContent = 'No blocklist sources loaded.';
+                    el.appendChild(li);
                 } else {
-                    el.textContent = '';
                     sources.forEach(s => {
-                        const div = document.createElement('div');
-                        div.style.marginBottom = '0.25rem';
-                        div.textContent = '\u2022 ' + s;
-                        div.style.fontFamily = 'monospace';
-                        div.style.fontSize = '0.8rem';
-                        el.appendChild(div);
+                        const li = document.createElement('li');
+                        const label = document.createElement('span');
+                        label.className = 'upstream-label';
+                        label.textContent = s;
+                        li.appendChild(label);
+                        const btn = document.createElement('button');
+                        btn.className = 'btn-remove';
+                        btn.textContent = 'Remove';
+                        btn.onclick = () => removeBlocklistSource(s);
+                        li.appendChild(btn);
+                        el.appendChild(li);
                     });
                 }
             } catch(e) { console.error(e); }
@@ -662,7 +701,20 @@
                 const res = await fetch('/api/upstreams');
                 const upstreams = await res.json();
                 const el = document.getElementById('upstreamList');
-                el.innerHTML = upstreams.map(u => `<li>${u}</li>`).join('');
+                el.textContent = '';
+                upstreams.forEach(u => {
+                    const li = document.createElement('li');
+                    const label = document.createElement('span');
+                    label.className = 'upstream-label';
+                    label.textContent = u;
+                    li.appendChild(label);
+                    const btn = document.createElement('button');
+                    btn.className = 'btn-remove';
+                    btn.textContent = 'Remove';
+                    btn.onclick = () => removeUpstream(u);
+                    li.appendChild(btn);
+                    el.appendChild(li);
+                });
             } catch(e) { console.error(e); }
         }
 
@@ -679,16 +731,13 @@
             refreshUpstreams();
         }
 
-        async function removeUpstream() {
-            const input = document.getElementById('upstreamInput');
-            const upstream = input.value.trim();
-            if (!upstream) return;
+        async function removeUpstream(upstream) {
+            if (!confirm('Remove upstream server ' + upstream + '?')) return;
             await fetch('/api/upstreams/remove', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ upstream })
             });
-            input.value = '';
             refreshUpstreams();
         }
 
