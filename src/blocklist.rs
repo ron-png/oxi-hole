@@ -152,6 +152,8 @@ impl BlocklistManager {
     }
 
     /// Fetch and parse a blocklist from a URL or local file path.
+    /// Applies per-source `@@` exceptions before returning, so callers
+    /// only see the final filtered domain list.
     async fn fetch_blocklist(&self, source: &str) -> anyhow::Result<Vec<String>> {
         let content = if source.starts_with("http://") || source.starts_with("https://") {
             let resp = reqwest::get(source).await?;
@@ -160,7 +162,13 @@ impl BlocklistManager {
             tokio::fs::read_to_string(source).await?
         };
 
-        Ok(parse_blocklist(&content))
+        let parsed = parse_blocklist(&content);
+        let domains = parsed
+            .blocked
+            .into_iter()
+            .filter(|d| !parsed.exceptions.contains(d))
+            .collect();
+        Ok(domains)
     }
 
     /// Check if a domain should be blocked.
@@ -293,118 +301,472 @@ fn normalize_domain(domain: &str) -> String {
     domain.to_lowercase().trim_end_matches('.').to_string()
 }
 
-/// Parse a blocklist supporting multiple formats.
-fn parse_blocklist(content: &str) -> Vec<String> {
-    let mut domains = Vec::new();
+/// Result of parsing a blocklist file.
+struct ParseResult {
+    blocked: Vec<String>,
+    exceptions: HashSet<String>,
+}
 
-    for line in content.lines() {
-        let line = line.trim();
+/// Adblock modifiers that are browser-only — rules containing these are skipped.
+const BROWSER_ONLY_MODIFIERS: &[&str] = &[
+    "script",
+    "image",
+    "stylesheet",
+    "object",
+    "xmlhttprequest",
+    "xhr",
+    "other",
+    "subdocument",
+    "document",
+    "websocket",
+    "webrtc",
+    "ping",
+    "font",
+    "media",
+    "popup",
+    "popunder",
+    "inline-script",
+    "inline-font",
+    "generichide",
+    "genericblock",
+    "specifichide",
+    // Modifier prefixes (checked with starts_with)
+    "domain=",
+    "csp=",
+    "redirect=",
+    "redirect-rule=",
+    "removeparam=",
+    "header=",
+];
 
-        if line.is_empty() || line.starts_with('#') || line.starts_with('!') {
+/// Adblock modifiers that are DNS-safe — silently accepted, domain is still blocked.
+const DNS_SAFE_MODIFIERS: &[&str] = &["important", "third-party", "all", "1p", "3p", "dnsrewrite"];
+
+/// Hostnames to skip in hosts-format lines.
+const SKIP_HOSTS: &[&str] = &[
+    "localhost",
+    "broadcasthost",
+    "local",
+    "ip6-localhost",
+    "ip6-loopback",
+    "ip6-allnodes",
+    "ip6-allrouters",
+    "ip6-localnet",
+];
+
+/// IPs that mark a line as hosts-format.
+const SINKHOLE_IPS: &[&str] = &["0.0.0.0", "127.0.0.1", "::1", "::0", "255.255.255.255"];
+
+/// Parse a blocklist supporting multiple formats in a single universal pass.
+///
+/// Supported formats:
+/// - Hosts file (`0.0.0.0 domain`, multi-hostname, inline comments)
+/// - Adblock (`||domain^`, modifiers, `@@` exceptions)
+/// - Wildcard (`*.domain.com`)
+/// - Dnsmasq (`local=/domain/`, `server=/domain/`, `address=/domain/ip`)
+/// - Domain-only (bare `domain.com`)
+/// - Comments (`#`, `!`, `;`, `[Adblock` headers)
+fn parse_blocklist(content: &str) -> ParseResult {
+    let mut blocked = Vec::new();
+    let mut exceptions = HashSet::new();
+
+    'line: for raw in content.lines() {
+        let line = raw.trim();
+
+        // 1. Skip empty lines and full-line comment starters
+        if line.is_empty()
+            || line.starts_with('#')
+            || line.starts_with('!')
+            || line.starts_with(';')
+            || line.starts_with('[')
+        {
             continue;
         }
 
-        // Wildcard format: *.domain.com -> domain.com
-        if let Some(domain) = line.strip_prefix("*.") {
-            let domain = domain.trim();
-            if is_valid_domain(domain) {
-                domains.push(normalize_domain(domain));
-                continue;
+        // 2. Adblock exception: @@||domain^...
+        if let Some(rest) = line.strip_prefix("@@||") {
+            if let Some(domain) = parse_adblock_domain(rest) {
+                exceptions.insert(normalize_domain(&domain));
             }
+            continue;
         }
 
-        // Adblock-style: ||domain.com^ with optional modifiers (e.g. ^$third-party, ^|)
+        // Skip other @@ forms (e.g. @@http://)
+        if line.starts_with("@@") {
+            continue;
+        }
+
+        // 3. Adblock block rule: ||domain^...
         if let Some(rest) = line.strip_prefix("||") {
-            // Split at '^' to strip the anchor and any trailing modifiers
-            let bare = rest.split('^').next().unwrap_or(rest);
-            let domain = bare.trim();
-            if is_valid_domain(domain) {
-                domains.push(normalize_domain(domain));
-                continue;
+            if let Some(domain) = parse_adblock_domain(rest) {
+                blocked.push(normalize_domain(&domain));
             }
+            continue;
         }
 
-        // Hosts file format
-        let parts: Vec<&str> = line.split_whitespace().collect();
-        if parts.len() >= 2 {
-            let ip = parts[0];
-            if ip == "0.0.0.0" || ip == "127.0.0.1" || ip == "::1" || ip == "::0" {
-                let domain = parts[1];
-                if is_valid_domain(domain) && domain != "localhost" {
-                    domains.push(normalize_domain(domain));
-                    continue;
+        // 4. Wildcard: *.domain.com
+        if let Some(rest) = line.strip_prefix("*.") {
+            let domain = strip_inline_comment(rest).trim();
+            if is_valid_domain(domain) {
+                blocked.push(normalize_domain(domain));
+            }
+            continue;
+        }
+
+        // 5. Dnsmasq: local=/domain/, server=/domain/, address=/domain/ip
+        if let Some(inner) = line
+            .strip_prefix("local=/")
+            .or_else(|| line.strip_prefix("server=/"))
+            .or_else(|| line.strip_prefix("address=/"))
+        {
+            if let Some(domain) = inner.split('/').next() {
+                let domain = domain.trim();
+                if is_valid_domain(domain) {
+                    blocked.push(normalize_domain(domain));
                 }
             }
+            continue;
         }
 
-        // Domain-only format
-        if parts.len() == 1 && is_valid_domain(line) {
-            domains.push(normalize_domain(line));
+        // Strip inline comment for remaining formats
+        let effective = strip_inline_comment(line);
+        let effective = effective.trim();
+        if effective.is_empty() {
+            continue;
+        }
+
+        // 6. Hosts format: <sinkhole_ip> host1 host2 ...
+        let parts: Vec<&str> = effective.split_whitespace().collect();
+        if parts.len() >= 2 {
+            let ip = parts[0];
+            if SINKHOLE_IPS.contains(&ip) {
+                for &hostname in &parts[1..] {
+                    if SKIP_HOSTS.contains(&hostname) {
+                        continue;
+                    }
+                    if is_valid_domain(hostname) {
+                        blocked.push(normalize_domain(hostname));
+                    }
+                }
+                continue 'line;
+            }
+        }
+
+        // 7. Domain-only: single token
+        if parts.len() == 1 && is_valid_domain(parts[0]) {
+            blocked.push(normalize_domain(parts[0]));
         }
     }
 
-    domains
+    ParseResult {
+        blocked,
+        exceptions,
+    }
+}
+
+/// Extract a domain from the portion after `||` or `@@||` in an adblock rule.
+/// Returns None if the rule has a path component, browser-only modifiers,
+/// or is otherwise not applicable to DNS-level blocking.
+fn parse_adblock_domain(rest: &str) -> Option<String> {
+    // Split at '^' — everything before is the domain
+    let (domain_part, after_caret) = if let Some(idx) = rest.find('^') {
+        (&rest[..idx], Some(&rest[idx + 1..]))
+    } else {
+        // No caret — bare `||domain` without anchor, treat as domain
+        (rest, None)
+    };
+
+    let domain = domain_part.trim();
+
+    // Skip rules with path components
+    if domain.contains('/') {
+        return None;
+    }
+
+    // Check modifiers if present
+    if let Some(mods) = after_caret {
+        // Strip leading `|` (end-of-string anchor, DNS-safe)
+        let mods = mods.trim_start_matches('|');
+
+        if !mods.is_empty() {
+            if let Some(mod_str) = mods.strip_prefix('$') {
+                for part in mod_str.split(',') {
+                    let part = part.trim();
+                    if part.is_empty() {
+                        continue;
+                    }
+                    if DNS_SAFE_MODIFIERS.contains(&part) {
+                        continue;
+                    }
+                    let is_browser_only = BROWSER_ONLY_MODIFIERS.iter().any(|bm| {
+                        if bm.ends_with('=') {
+                            part.starts_with(bm)
+                        } else {
+                            part == *bm
+                        }
+                    });
+                    if is_browser_only {
+                        return None;
+                    }
+                    // Unknown modifier — skip to be safe
+                    return None;
+                }
+            } else if !mods.is_empty() {
+                // Non-empty, non-$ content after ^| — not a standard rule, skip
+                return None;
+            }
+        }
+    }
+
+    if is_valid_domain(domain) {
+        Some(domain.to_string())
+    } else {
+        None
+    }
+}
+
+/// Strip inline comments: everything from ` #` (space-hash) onward.
+fn strip_inline_comment(s: &str) -> &str {
+    s.split(" #").next().unwrap_or(s)
 }
 
 fn is_valid_domain(s: &str) -> bool {
-    !s.is_empty()
-        && !s.starts_with('.')
-        && !s.starts_with('-')
-        && s.contains('.')
-        && s.chars()
-            .all(|c| c.is_alphanumeric() || c == '.' || c == '-' || c == '_')
+    if s.is_empty() || s.len() > 253 {
+        return false;
+    }
+
+    // Must contain at least one dot
+    if !s.contains('.') {
+        return false;
+    }
+
+    // Reject paths
+    if s.contains('/') {
+        return false;
+    }
+
+    // Reject all-numeric-label strings (IPv4 addresses like 0.0.0.0, 127.0.0.1)
+    let all_numeric = s.split('.').all(|label| label.chars().all(|c| c.is_ascii_digit()));
+    if all_numeric {
+        return false;
+    }
+
+    for label in s.split('.') {
+        if label.is_empty() || label.len() > 63 {
+            return false;
+        }
+        if label.starts_with('-') || label.ends_with('-') {
+            return false;
+        }
+        if !label
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+        {
+            return false;
+        }
+    }
+
+    true
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    // ── Hosts format ──
+
     #[test]
     fn test_parse_hosts_format() {
         let content = "0.0.0.0 ads.example.com\n127.0.0.1 tracker.example.com\n";
-        let domains = parse_blocklist(content);
-        assert_eq!(domains, vec!["ads.example.com", "tracker.example.com"]);
+        let result = parse_blocklist(content);
+        assert_eq!(result.blocked, vec!["ads.example.com", "tracker.example.com"]);
     }
 
     #[test]
-    fn test_parse_domain_only() {
-        let content = "ads.example.com\ntracker.example.com\n";
-        let domains = parse_blocklist(content);
-        assert_eq!(domains, vec!["ads.example.com", "tracker.example.com"]);
-    }
-
-    #[test]
-    fn test_parse_adblock_style() {
-        let content = "||ads.example.com^\n||tracker.example.com^\n";
-        let domains = parse_blocklist(content);
-        assert_eq!(domains, vec!["ads.example.com", "tracker.example.com"]);
-    }
-
-    #[test]
-    fn test_parse_adblock_with_modifiers() {
-        let content = "||ads.example.com^$third-party\n||tracker.example.com^$important\n||banner.example.com^|\n";
-        let domains = parse_blocklist(content);
+    fn test_parse_hosts_multi_hostname() {
+        let content = "0.0.0.0 ads.example.com tracker.example.com banner.example.com\n";
+        let result = parse_blocklist(content);
         assert_eq!(
-            domains,
-            vec![
-                "ads.example.com",
-                "tracker.example.com",
-                "banner.example.com"
-            ]
+            result.blocked,
+            vec!["ads.example.com", "tracker.example.com", "banner.example.com"]
         );
     }
 
     #[test]
-    fn test_parse_comments_and_empty_lines() {
-        let content = "# comment\n! another comment\n\nads.example.com\n";
-        let domains = parse_blocklist(content);
-        assert_eq!(domains, vec!["ads.example.com"]);
+    fn test_parse_hosts_inline_comment() {
+        let content = "0.0.0.0 ads.example.com # ad server\n";
+        let result = parse_blocklist(content);
+        assert_eq!(result.blocked, vec!["ads.example.com"]);
     }
+
+    #[test]
+    fn test_parse_hosts_skips_localhost() {
+        let content = "127.0.0.1 localhost\n0.0.0.0 broadcasthost\n::1 ip6-localhost\n0.0.0.0 ads.example.com\n";
+        let result = parse_blocklist(content);
+        assert_eq!(result.blocked, vec!["ads.example.com"]);
+    }
+
+    // ── Domain-only format ──
+
+    #[test]
+    fn test_parse_domain_only() {
+        let content = "ads.example.com\ntracker.example.com\n";
+        let result = parse_blocklist(content);
+        assert_eq!(result.blocked, vec!["ads.example.com", "tracker.example.com"]);
+    }
+
+    #[test]
+    fn test_parse_domain_only_inline_comment() {
+        let content = "ads.example.com # this is blocked\n";
+        let result = parse_blocklist(content);
+        assert_eq!(result.blocked, vec!["ads.example.com"]);
+    }
+
+    // ── Adblock format ──
+
+    #[test]
+    fn test_parse_adblock_style() {
+        let content = "||ads.example.com^\n||tracker.example.com^\n";
+        let result = parse_blocklist(content);
+        assert_eq!(result.blocked, vec!["ads.example.com", "tracker.example.com"]);
+    }
+
+    #[test]
+    fn test_parse_adblock_with_dns_safe_modifiers() {
+        let content = "||ads.example.com^$third-party\n||tracker.example.com^$important\n||banner.example.com^|\n";
+        let result = parse_blocklist(content);
+        assert_eq!(
+            result.blocked,
+            vec!["ads.example.com", "tracker.example.com", "banner.example.com"]
+        );
+    }
+
+    #[test]
+    fn test_parse_adblock_browser_only_skipped() {
+        let content = "||ads.example.com^$script\n||tracker.example.com^$image\n||font.example.com^$stylesheet\n||ok.example.com^\n";
+        let result = parse_blocklist(content);
+        assert_eq!(result.blocked, vec!["ok.example.com"]);
+    }
+
+    #[test]
+    fn test_parse_adblock_mixed_modifiers_skipped() {
+        // If ANY modifier is browser-only, the whole rule is skipped
+        let content = "||ads.example.com^$third-party,image\n";
+        let result = parse_blocklist(content);
+        assert!(result.blocked.is_empty());
+    }
+
+    #[test]
+    fn test_parse_adblock_path_rule_skipped() {
+        let content = "||ads.example.com/banner/ad.js^\n||ok.example.com^\n";
+        let result = parse_blocklist(content);
+        assert_eq!(result.blocked, vec!["ok.example.com"]);
+    }
+
+    #[test]
+    fn test_parse_adblock_exception() {
+        let content = "||ads.example.com^\n@@||ads.example.com^\n||tracker.example.com^\n";
+        let result = parse_blocklist(content);
+        assert_eq!(result.blocked, vec!["ads.example.com", "tracker.example.com"]);
+        assert!(result.exceptions.contains("ads.example.com"));
+        assert!(!result.exceptions.contains("tracker.example.com"));
+    }
+
+    // ── Wildcard format ──
+
+    #[test]
+    fn test_parse_wildcard() {
+        let content = "*.ads.example.com\n*.tracker.example.com\n";
+        let result = parse_blocklist(content);
+        assert_eq!(result.blocked, vec!["ads.example.com", "tracker.example.com"]);
+    }
+
+    // ── Dnsmasq format ──
+
+    #[test]
+    fn test_parse_dnsmasq_local() {
+        let content = "local=/ads.example.com/\nlocal=/tracker.example.com/\n";
+        let result = parse_blocklist(content);
+        assert_eq!(result.blocked, vec!["ads.example.com", "tracker.example.com"]);
+    }
+
+    #[test]
+    fn test_parse_dnsmasq_server() {
+        let content = "server=/ads.example.com/\n";
+        let result = parse_blocklist(content);
+        assert_eq!(result.blocked, vec!["ads.example.com"]);
+    }
+
+    #[test]
+    fn test_parse_dnsmasq_address() {
+        let content = "address=/ads.example.com/0.0.0.0\naddress=/tracker.example.com/\n";
+        let result = parse_blocklist(content);
+        assert_eq!(result.blocked, vec!["ads.example.com", "tracker.example.com"]);
+    }
+
+    // ── Comments ──
+
+    #[test]
+    fn test_parse_comments_and_empty_lines() {
+        let content = "# comment\n! another comment\n; rpz comment\n[Adblock Plus 2.0]\n\nads.example.com\n";
+        let result = parse_blocklist(content);
+        assert_eq!(result.blocked, vec!["ads.example.com"]);
+    }
+
+    // ── Mixed format list ──
+
+    #[test]
+    fn test_parse_mixed_formats() {
+        let content = "\
+# Mixed blocklist
+! Header comment
+0.0.0.0 hosts.example.com
+||adblock.example.com^
+*.wildcard.example.com
+local=/dnsmasq.example.com/
+domain-only.example.com
+";
+        let result = parse_blocklist(content);
+        assert_eq!(
+            result.blocked,
+            vec![
+                "hosts.example.com",
+                "adblock.example.com",
+                "wildcard.example.com",
+                "dnsmasq.example.com",
+                "domain-only.example.com",
+            ]
+        );
+    }
+
+    // ── is_valid_domain ──
+
+    #[test]
+    fn test_is_valid_domain() {
+        assert!(is_valid_domain("example.com"));
+        assert!(is_valid_domain("sub.example.com"));
+        assert!(is_valid_domain("_dmarc.example.com"));
+        assert!(is_valid_domain("xn--nxasmq6b.com"));
+
+        // Rejects
+        assert!(!is_valid_domain(""));
+        assert!(!is_valid_domain("localhost"));
+        assert!(!is_valid_domain(".example.com"));
+        assert!(!is_valid_domain("-example.com"));
+        assert!(!is_valid_domain("example.com/path"));
+        assert!(!is_valid_domain("0.0.0.0"));
+        assert!(!is_valid_domain("127.0.0.1"));
+        assert!(!is_valid_domain("a..b.com"));
+    }
+
+    // ── normalize_domain ──
 
     #[test]
     fn test_normalize_domain() {
         assert_eq!(normalize_domain("ADS.Example.COM."), "ads.example.com");
     }
+
+    // ── BlocklistManager integration ──
 
     #[tokio::test]
     async fn test_is_blocked() {
@@ -442,8 +804,6 @@ mod tests {
         assert!(mgr.is_blocked("base.example.com").await);
         assert_eq!(mgr.blocked_count().await, 1);
 
-        // add_blocklist_source and remove_blocklist_source can't be fully tested
-        // without a URL, but we can test custom blocked add/remove
         mgr.add_custom_blocked("new.example.com").await;
         assert!(mgr.is_blocked("new.example.com").await);
 
