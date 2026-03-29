@@ -88,6 +88,51 @@ async fn main() -> anyhow::Result<()> {
         config.blocking.custom_blocked.len(),
     );
 
+    // Health-check mode: verify config loads, upstreams resolve, DNS works, then exit
+    if health_check {
+        info!("Running health check...");
+
+        // Build TLS configs (needed for upstream)
+        let client_tls_config = tls::build_client_config()?;
+        let quic_client_config = tls::build_quic_client_config()?;
+
+        // Build upstream forwarder (tests hostname resolution)
+        let upstream = dns::upstream::UpstreamForwarder::new(
+            &config.dns.upstreams,
+            config.dns.timeout_ms,
+            client_tls_config,
+            quic_client_config,
+        )?;
+        info!("Health check: upstreams OK");
+
+        // Send a test DNS query through the upstream pipeline
+        use hickory_proto::op::{Header, Message, MessageType, OpCode, Query};
+        use hickory_proto::rr::{Name, RecordType};
+
+        let mut msg = Message::new();
+        let mut header = Header::new();
+        header.set_id(1234);
+        header.set_message_type(MessageType::Query);
+        header.set_op_code(OpCode::Query);
+        header.set_recursion_desired(true);
+        msg.set_header(header);
+        let mut query = Query::new();
+        query.set_name(Name::from_ascii("dns.google.")?);
+        query.set_query_type(RecordType::A);
+        msg.add_query(query);
+        let packet = msg.to_vec()?;
+
+        let (response_bytes, upstream_label) = upstream.forward(&packet).await?;
+        info!(
+            "Health check: test query resolved via {} ({} bytes)",
+            upstream_label,
+            response_bytes.len()
+        );
+
+        info!("Health check passed");
+        return Ok(());
+    }
+
     // Build TLS configs
     let needs_tls = config.dns.dot_listen.is_some()
         || config.dns.doh_listen.is_some()
