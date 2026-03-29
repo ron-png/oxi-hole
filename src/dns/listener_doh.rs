@@ -20,6 +20,23 @@ use tokio_rustls::TlsAcceptor;
 use tower_service::Service;
 use tracing::{debug, error, info};
 
+/// Bind a TCP socket, optionally with SO_REUSEPORT for zero-downtime takeover.
+fn bind_tcp_reuse_port(addr: &str) -> anyhow::Result<std::net::TcpListener> {
+    use socket2::{Domain, Protocol, Socket, Type};
+    let sock_addr: std::net::SocketAddr = addr.parse()?;
+    let domain = if sock_addr.is_ipv4() {
+        Domain::IPV4
+    } else {
+        Domain::IPV6
+    };
+    let socket = Socket::new(domain, Type::STREAM, Some(Protocol::TCP))?;
+    socket.set_reuse_port(true)?;
+    socket.set_nonblocking(true)?;
+    socket.bind(&sock_addr.into())?;
+    socket.listen(128)?;
+    Ok(socket.into())
+}
+
 #[derive(Clone)]
 struct DohState {
     blocklist: BlocklistManager,
@@ -42,6 +59,7 @@ pub async fn run(
     tls_config: Arc<rustls::ServerConfig>,
     query_log: QueryLog,
     anonymize_ip: Arc<AtomicBool>,
+    reuse_port: bool,
 ) -> anyhow::Result<()> {
     let state = DohState {
         blocklist,
@@ -57,7 +75,12 @@ pub async fn run(
         .route("/dns-query", get(doh_get).post(doh_post))
         .with_state(state);
 
-    let tcp_listener = TcpListener::bind(&addr).await?;
+    let tcp_listener = if reuse_port {
+        let std_listener = bind_tcp_reuse_port(&addr)?;
+        TcpListener::from_std(std_listener)?
+    } else {
+        TcpListener::bind(&addr).await?
+    };
     let acceptor = TlsAcceptor::from(tls_config);
     info!("DoH listener ready on https://{}/dns-query", addr);
 
