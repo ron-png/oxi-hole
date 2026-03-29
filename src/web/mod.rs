@@ -141,8 +141,7 @@ pub async fn run_web_server(listen: &str, state: AppState) -> anyhow::Result<()>
     } else {
         socket2::Domain::IPV6
     };
-    let socket =
-        socket2::Socket::new(domain, socket2::Type::STREAM, Some(socket2::Protocol::TCP))?;
+    let socket = socket2::Socket::new(domain, socket2::Type::STREAM, Some(socket2::Protocol::TCP))?;
     socket.set_reuse_port(true)?;
     socket.set_nonblocking(true)?;
     socket.bind(&sock_addr.into())?;

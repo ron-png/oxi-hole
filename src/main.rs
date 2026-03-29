@@ -34,10 +34,10 @@ async fn main() -> anyhow::Result<()> {
             "--takeover" => takeover = true,
             "--ready-file" => {
                 i += 1;
-                ready_file = Some(PathBuf::from(
-                    args.get(i)
-                        .ok_or_else(|| anyhow::anyhow!("--ready-file requires a path"))?,
-                ));
+                ready_file =
+                    Some(PathBuf::from(args.get(i).ok_or_else(|| {
+                        anyhow::anyhow!("--ready-file requires a path")
+                    })?));
             }
             other => {
                 if config_arg.is_none() && !other.starts_with('-') {
@@ -251,7 +251,9 @@ async fn main() -> anyhow::Result<()> {
         upstream: upstream_for_web,
         auto_update: std::sync::Arc::new(tokio::sync::RwLock::new(config.system.auto_update)),
         update_checker,
-        update_status: std::sync::Arc::new(tokio::sync::RwLock::new(crate::update::UpdateStatus::default())),
+        update_status: std::sync::Arc::new(tokio::sync::RwLock::new(
+            crate::update::UpdateStatus::default(),
+        )),
         blocklist_update_interval,
         blocking_mode,
         config_path: config_path.clone(),
@@ -376,29 +378,39 @@ async fn main() -> anyhow::Result<()> {
                     }
                 };
 
-                let health_output = match tokio::time::timeout(
-                    std::time::Duration::from_secs(30),
-                    health_child.wait_with_output(),
-                )
-                .await
-                {
-                    Ok(Ok(output)) => output,
-                    Ok(Err(e)) => {
-                        tracing::warn!("Auto-update: health check failed: {}", e);
-                        let _ = health_child.kill().await;
-                        let mut s = update_status.write().await;
-                        s.state = crate::update::UpdateState::Failed;
-                        s.message = Some(format!("Health check failed: {}", e));
-                        s.logs = Some(e.to_string());
-                        continue;
+                let health_output = tokio::select! {
+                    result = health_child.wait() => {
+                        match result {
+                            Ok(_status) => {
+                                // Child exited; collect its output
+                                let mut stdout = Vec::new();
+                                let mut stderr = Vec::new();
+                                if let Some(mut out) = health_child.stdout.take() {
+                                    let _ = tokio::io::AsyncReadExt::read_to_end(&mut out, &mut stdout).await;
+                                }
+                                if let Some(mut err) = health_child.stderr.take() {
+                                    let _ = tokio::io::AsyncReadExt::read_to_end(&mut err, &mut stderr).await;
+                                }
+                                std::process::Output { status: _status, stdout, stderr }
+                            }
+                            Err(e) => {
+                                tracing::warn!("Auto-update: health check failed: {}", e);
+                                let mut s = update_status.write().await;
+                                s.state = crate::update::UpdateState::Failed;
+                                s.message = Some(format!("Health check failed: {}", e));
+                                s.logs = Some(e.to_string());
+                                continue;
+                            }
+                        }
                     }
-                    Err(_) => {
-                        tracing::warn!("Auto-update: health check timed out (30s), killing child process");
+                    _ = tokio::time::sleep(std::time::Duration::from_secs(30)) => {
+                        tracing::warn!(
+                            "Auto-update: health check timed out (30s), killing child process"
+                        );
                         let _ = health_child.kill().await;
                         let mut s = update_status.write().await;
                         s.state = crate::update::UpdateState::Failed;
-                        s.message =
-                            Some("Health check timed out after 30 seconds".to_string());
+                        s.message = Some("Health check timed out after 30 seconds".to_string());
                         continue;
                     }
                 };
@@ -432,8 +444,7 @@ async fn main() -> anyhow::Result<()> {
                     None => {
                         let mut s = update_status.write().await;
                         s.state = crate::update::UpdateState::Failed;
-                        s.message =
-                            Some("Cannot determine current binary path".to_string());
+                        s.message = Some("Cannot determine current binary path".to_string());
                         continue;
                     }
                 };
@@ -448,8 +459,7 @@ async fn main() -> anyhow::Result<()> {
                     }
                 };
 
-                if let Err(e) =
-                    crate::update::try_replace_binary(&current_exe_path, &binary_bytes)
+                if let Err(e) = crate::update::try_replace_binary(&current_exe_path, &binary_bytes)
                 {
                     let mut s = update_status.write().await;
                     s.state = crate::update::UpdateState::Failed;
@@ -480,14 +490,10 @@ async fn main() -> anyhow::Result<()> {
                 let mut child = match child {
                     Ok(c) => c,
                     Err(e) => {
-                        tracing::warn!(
-                            "Auto-update: failed to start new process: {}",
-                            e
-                        );
+                        tracing::warn!("Auto-update: failed to start new process: {}", e);
                         let mut s = update_status.write().await;
                         s.state = crate::update::UpdateState::Failed;
-                        s.message =
-                            Some(format!("Failed to start new process: {}", e));
+                        s.message = Some(format!("Failed to start new process: {}", e));
                         continue;
                     }
                 };
@@ -505,16 +511,12 @@ async fn main() -> anyhow::Result<()> {
                             );
                             let mut s = update_status.write().await;
                             s.state = crate::update::UpdateState::Failed;
-                            s.message =
-                                Some(format!("New process exited with {:?}", status));
+                            s.message = Some(format!("New process exited with {:?}", status));
                             break;
                         }
                         Ok(None) => {}
                         Err(e) => {
-                            tracing::warn!(
-                                "Auto-update: failed to check child: {}",
-                                e
-                            );
+                            tracing::warn!("Auto-update: failed to check child: {}", e);
                             break;
                         }
                     }
@@ -526,24 +528,18 @@ async fn main() -> anyhow::Result<()> {
                 }
 
                 if ready {
-                    tracing::warn!(
-                        "Auto-update: v{} is ready, handing off — goodbye!",
-                        version
-                    );
+                    tracing::warn!("Auto-update: v{} is ready, handing off — goodbye!", version);
                     let _ = std::fs::remove_file(&ready_path);
                     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                     std::process::exit(0);
                 } else {
-                    tracing::warn!(
-                        "Auto-update: new process failed to become ready within 60s"
-                    );
+                    tracing::warn!("Auto-update: new process failed to become ready within 60s");
                     let _ = child.kill().await;
                     let mut s = update_status.write().await;
                     if s.state != crate::update::UpdateState::Failed {
                         s.state = crate::update::UpdateState::Failed;
                         s.message = Some(
-                            "New process failed to become ready within 60 seconds"
-                                .to_string(),
+                            "New process failed to become ready within 60 seconds".to_string(),
                         );
                     }
                 }
