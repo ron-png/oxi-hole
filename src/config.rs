@@ -43,6 +43,8 @@ pub struct Config {
     pub tls: TlsConfig,
     #[serde(default)]
     pub system: SystemConfig,
+    #[serde(default)]
+    pub log: LogConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -114,6 +116,29 @@ pub struct SystemConfig {
     /// Whether to auto-update the server. Warning: An update could cause unforseeable bugs which could lead to the dns service breaking.
     #[serde(default)]
     pub auto_update: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LogConfig {
+    /// How many days to retain query logs (1-90)
+    #[serde(default = "default_log_retention_days")]
+    pub retention_days: u32,
+    /// Whether to anonymize client IPs in the query log
+    #[serde(default)]
+    pub anonymize_client_ip: bool,
+}
+
+fn default_log_retention_days() -> u32 {
+    90
+}
+
+impl Default for LogConfig {
+    fn default() -> Self {
+        Self {
+            retention_days: default_log_retention_days(),
+            anonymize_client_ip: false,
+        }
+    }
 }
 
 fn default_dns() -> DnsConfig {
@@ -204,6 +229,7 @@ impl Default for Config {
             blocking: BlockingConfig::default(),
             tls: TlsConfig::default(),
             system: SystemConfig::default(),
+            log: LogConfig::default(),
         }
     }
 }

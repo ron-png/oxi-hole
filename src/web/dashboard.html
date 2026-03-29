@@ -797,6 +797,91 @@
                 font-size: 12px;
             }
         }
+        /* ---- Logs Panel ---- */
+        .logs-controls {
+            display: flex;
+            gap: 12px;
+            margin-bottom: 16px;
+            flex-wrap: wrap;
+        }
+
+        .logs-controls input[type="text"] {
+            flex: 1;
+            min-width: 200px;
+        }
+
+        .logs-controls select {
+            padding: 8px 12px;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            background: var(--bg-subtle);
+            color: var(--text-primary);
+            font-family: var(--font-mono);
+            font-size: 13px;
+        }
+
+        .logs-controls .btn-refresh {
+            padding: 8px 16px;
+            white-space: nowrap;
+        }
+
+        .logs-settings {
+            display: flex;
+            gap: 24px;
+            align-items: center;
+            flex-wrap: wrap;
+            margin-bottom: 16px;
+            padding: 12px 16px;
+            background: var(--bg-subtle);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            font-size: 13px;
+        }
+
+        .logs-settings label {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            color: var(--text-secondary);
+        }
+
+        .logs-settings input[type="number"] {
+            width: 60px;
+            padding: 4px 8px;
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            background: var(--bg-page);
+            color: var(--text-primary);
+            font-family: var(--font-mono);
+            font-size: 13px;
+        }
+
+        .attribution-cell {
+            cursor: default;
+        }
+
+        .attribution-cell .feature-name {
+            border-bottom: 1px dotted var(--text-muted);
+        }
+
+        #logsSentinel {
+            height: 1px;
+        }
+
+        .logs-status {
+            text-align: center;
+            padding: 16px;
+            color: var(--text-muted);
+            font-size: 13px;
+        }
+
+        .auto-refresh-toggle {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 13px;
+            color: var(--text-secondary);
+        }
     </style>
 </head>
 
@@ -807,6 +892,7 @@
             <div class="header-right">
                 <div class="mode-toggle">
                     <button id="modeSimple" class="active" onclick="setMode('simple')">Simple</button>
+                    <button id="modeLogs" onclick="setMode('logs')">Logs</button>
                     <button id="modeAdvanced" onclick="setMode('advanced')">Advanced</button>
                 </div>
                 <button id="masterToggle" class="master-toggle enabled" onclick="toggleMasterBlocking()">
@@ -856,6 +942,65 @@
                         </thead>
                         <tbody id="queryBodySimple"></tbody>
                     </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- ==================== LOGS MODE ==================== -->
+        <div id="panelLogs" class="panel">
+            <div class="section">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+                    <h2>Query Log</h2>
+                    <div class="auto-refresh-toggle">
+                        <label>
+                            <input type="checkbox" id="logsAutoRefresh" onchange="toggleLogsAutoRefresh(this.checked)">
+                            Auto-refresh
+                        </label>
+                        <button class="btn btn-sm" id="logsRefreshBtn" onclick="resetAndLoadLogs()">Refresh</button>
+                    </div>
+                </div>
+
+                <div class="logs-settings">
+                    <label>
+                        Retention:
+                        <input type="number" id="logRetentionInput" min="1" max="90" value="90">
+                        days
+                    </label>
+                    <button class="btn btn-sm" onclick="saveLogSettings()">Save</button>
+                    <label style="margin-left: auto;">
+                        <input type="checkbox" id="logAnonIpCheckbox" onchange="saveLogSettings()">
+                        Anonymize client IPs
+                    </label>
+                </div>
+
+                <div class="logs-controls">
+                    <input type="text" id="logSearchInput" placeholder="Search domains, IPs, sources..." oninput="debounceLogSearch()">
+                    <select id="logStatusFilter" onchange="resetAndLoadLogs()">
+                        <option value="">All statuses</option>
+                        <option value="allowed">Allowed</option>
+                        <option value="blocked">Blocked</option>
+                        <option value="rewritten">Rewritten</option>
+                    </select>
+                </div>
+
+                <div id="logs-table-wrap">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Time</th>
+                                <th>Domain</th>
+                                <th>Type</th>
+                                <th>Client</th>
+                                <th>Status</th>
+                                <th>Source</th>
+                                <th>Upstream</th>
+                                <th>Time (ms)</th>
+                            </tr>
+                        </thead>
+                        <tbody id="logsBody"></tbody>
+                    </table>
+                    <div id="logsSentinel"></div>
+                    <div id="logsStatus" class="logs-status"></div>
                 </div>
             </div>
         </div>
@@ -1044,8 +1189,10 @@
         function setMode(mode) {
             currentMode = mode;
             document.getElementById('panelSimple').classList.toggle('active', mode === 'simple');
+            document.getElementById('panelLogs').classList.toggle('active', mode === 'logs');
             document.getElementById('panelAdvanced').classList.toggle('active', mode === 'advanced');
             document.getElementById('modeSimple').classList.toggle('active', mode === 'simple');
+            document.getElementById('modeLogs').classList.toggle('active', mode === 'logs');
             document.getElementById('modeAdvanced').classList.toggle('active', mode === 'advanced');
             if (mode === 'advanced') {
                 refreshQueries();
@@ -1056,6 +1203,10 @@
                 refreshCustomBlocked();
                 refreshAllowlist();
                 refreshBlockingMode();
+            }
+            if (mode === 'logs') {
+                refreshLogSettings();
+                resetAndLoadLogs();
             }
         }
 
@@ -1582,6 +1733,191 @@
                     // Still down, keep polling
                 }
             }, 1500);
+        }
+
+        // ---- Query Log (Logs tab) ----
+        const FEATURE_NAMES = {
+            'ads_malware': 'Block Ads, Malware & Trackers',
+            'nsfw': 'Block NSFW Content',
+            'safe_search': 'Enforce Safe Search',
+            'youtube_safe_search': 'YouTube Safe Search',
+        };
+
+        let logsCursor = null;
+        let logsLoading = false;
+        let logsHasMore = true;
+        let logsAutoRefreshInterval = null;
+        let logSearchTimeout = null;
+
+        function debounceLogSearch() {
+            clearTimeout(logSearchTimeout);
+            logSearchTimeout = setTimeout(() => resetAndLoadLogs(), 300);
+        }
+
+        function resetAndLoadLogs() {
+            logsCursor = null;
+            logsHasMore = true;
+            logsLoading = false;
+            // Disconnect observer during reset to prevent race with sentinel becoming visible
+            const sentinel = document.getElementById('logsSentinel');
+            if (sentinel) logsObserver.unobserve(sentinel);
+            document.getElementById('logsBody').textContent = '';
+            document.getElementById('logsStatus').textContent = '';
+            loadLogs().then(() => {
+                if (sentinel) logsObserver.observe(sentinel);
+            });
+        }
+
+        function escapeHtml(str) {
+            if (!str) return '';
+            const div = document.createElement('div');
+            div.textContent = str;
+            return div.textContent;
+        }
+
+        function createLogRow(e) {
+            const tr = document.createElement('tr');
+
+            const tdTime = document.createElement('td');
+            tdTime.textContent = new Date(e.timestamp).toLocaleTimeString();
+            tr.appendChild(tdTime);
+
+            const tdDomain = document.createElement('td');
+            tdDomain.textContent = e.domain;
+            tr.appendChild(tdDomain);
+
+            const tdType = document.createElement('td');
+            tdType.textContent = e.query_type;
+            tr.appendChild(tdType);
+
+            const tdClient = document.createElement('td');
+            tdClient.textContent = e.client_ip;
+            tr.appendChild(tdClient);
+
+            const tdStatus = document.createElement('td');
+            const badge = document.createElement('span');
+            badge.className = 'badge ' + (e.status === 'blocked' ? 'blocked' : (e.status === 'rewritten' ? 'rewrite' : 'allowed'));
+            badge.textContent = e.status === 'blocked' ? 'BLOCKED' : (e.status === 'rewritten' ? 'SAFE' : 'OK');
+            tdStatus.appendChild(badge);
+            tr.appendChild(tdStatus);
+
+            const tdSource = document.createElement('td');
+            if (e.block_feature && FEATURE_NAMES[e.block_feature]) {
+                const span = document.createElement('span');
+                span.className = 'feature-name';
+                span.textContent = FEATURE_NAMES[e.block_feature];
+                span.title = e.block_source || '';
+                tdSource.className = 'attribution-cell';
+                tdSource.appendChild(span);
+            } else if (e.block_source === 'custom') {
+                const span = document.createElement('span');
+                span.style.color = 'var(--color-orange)';
+                span.textContent = 'Custom';
+                tdSource.appendChild(span);
+            } else if (e.block_source) {
+                const span = document.createElement('span');
+                let short = e.block_source;
+                try { short = new URL(e.block_source).hostname; } catch {}
+                span.textContent = short;
+                span.title = e.block_source;
+                tdSource.appendChild(span);
+            } else {
+                tdSource.textContent = '-';
+            }
+            tr.appendChild(tdSource);
+
+            const tdUpstream = document.createElement('td');
+            tdUpstream.textContent = e.upstream || '-';
+            tr.appendChild(tdUpstream);
+
+            const tdMs = document.createElement('td');
+            tdMs.textContent = e.response_time_ms;
+            tr.appendChild(tdMs);
+
+            return tr;
+        }
+
+        async function loadLogs() {
+            if (logsLoading || !logsHasMore) return;
+            logsLoading = true;
+            document.getElementById('logsStatus').textContent = 'Loading...';
+
+            try {
+                const params = new URLSearchParams();
+                const search = document.getElementById('logSearchInput').value.trim();
+                const status = document.getElementById('logStatusFilter').value;
+                if (search) params.set('search', search);
+                if (status) params.set('status', status);
+                if (logsCursor) params.set('before_id', logsCursor);
+                params.set('limit', '100');
+
+                const res = await fetch('/api/logs?' + params.toString());
+                const page = await res.json();
+
+                const tbody = document.getElementById('logsBody');
+                for (const e of page.entries) {
+                    tbody.appendChild(createLogRow(e));
+                }
+
+                if (page.next_cursor) {
+                    logsCursor = page.next_cursor;
+                    document.getElementById('logsStatus').textContent = '';
+                } else {
+                    logsHasMore = false;
+                    document.getElementById('logsStatus').textContent = page.entries.length === 0 ? 'No entries found.' : 'End of log.';
+                }
+            } catch (e) {
+                console.error('Failed to load logs', e);
+                document.getElementById('logsStatus').textContent = 'Failed to load logs.';
+            }
+            logsLoading = false;
+        }
+
+        // Infinite scroll via IntersectionObserver
+        const logsObserver = new IntersectionObserver((entries) => {
+            if (entries[0].isIntersecting && currentMode === 'logs') {
+                loadLogs();
+            }
+        }, { threshold: 0.1 });
+
+        // Observe sentinel once DOM is ready
+        setTimeout(() => {
+            const sentinel = document.getElementById('logsSentinel');
+            if (sentinel) logsObserver.observe(sentinel);
+        }, 0);
+
+        function toggleLogsAutoRefresh(enabled) {
+            if (enabled) {
+                document.getElementById('logsRefreshBtn').style.display = 'none';
+                logsAutoRefreshInterval = setInterval(() => {
+                    if (currentMode === 'logs') resetAndLoadLogs();
+                }, 2000);
+            } else {
+                document.getElementById('logsRefreshBtn').style.display = '';
+                clearInterval(logsAutoRefreshInterval);
+                logsAutoRefreshInterval = null;
+            }
+        }
+
+        async function refreshLogSettings() {
+            try {
+                const res = await fetch('/api/logs/settings');
+                const data = await res.json();
+                document.getElementById('logRetentionInput').value = data.retention_days;
+                document.getElementById('logAnonIpCheckbox').checked = data.anonymize_client_ip;
+            } catch (e) { console.error('Failed to load log settings', e); }
+        }
+
+        async function saveLogSettings() {
+            const retention_days = parseInt(document.getElementById('logRetentionInput').value, 10);
+            const anonymize_client_ip = document.getElementById('logAnonIpCheckbox').checked;
+            try {
+                await fetch('/api/logs/settings', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ retention_days, anonymize_client_ip })
+                });
+            } catch (e) { console.error('Failed to save log settings', e); }
         }
 
         // ---- Auto-refresh ----

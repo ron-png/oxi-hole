@@ -3,6 +3,7 @@ use crate::config::BlockingMode;
 use crate::dns::handler;
 use crate::dns::upstream::UpstreamForwarder;
 use crate::features::FeatureManager;
+use crate::query_log::QueryLog;
 use crate::stats::Stats;
 use axum::extract::{Query, State};
 use axum::http::{header, StatusCode};
@@ -11,6 +12,7 @@ use axum::routing::get;
 use axum::Router;
 use base64::Engine;
 use serde::Deserialize;
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use tokio::net::TcpListener;
 use tokio::sync::RwLock;
@@ -25,6 +27,8 @@ struct DohState {
     upstream: UpstreamForwarder,
     features: FeatureManager,
     blocking_mode: Arc<RwLock<BlockingMode>>,
+    query_log: QueryLog,
+    anonymize_ip: Arc<AtomicBool>,
 }
 
 pub async fn run(
@@ -35,6 +39,8 @@ pub async fn run(
     features: FeatureManager,
     blocking_mode: Arc<RwLock<BlockingMode>>,
     tls_config: Arc<rustls::ServerConfig>,
+    query_log: QueryLog,
+    anonymize_ip: Arc<AtomicBool>,
 ) -> anyhow::Result<()> {
     let state = DohState {
         blocklist,
@@ -42,6 +48,8 @@ pub async fn run(
         upstream,
         features,
         blocking_mode,
+        query_log,
+        anonymize_ip,
     };
 
     let app = Router::new()
@@ -125,6 +133,8 @@ async fn doh_get(
         &state.stats,
         &state.features,
         &state.blocking_mode,
+        &state.query_log,
+        &state.anonymize_ip,
     )
     .await
     {
@@ -157,6 +167,8 @@ async fn doh_post(State(state): State<DohState>, req: axum::extract::Request) ->
         &state.stats,
         &state.features,
         &state.blocking_mode,
+        &state.query_log,
+        &state.anonymize_ip,
     )
     .await
     {

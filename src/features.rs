@@ -16,6 +16,15 @@ pub const SAFE_SEARCH_LIST_URL: &str =
 pub const YOUTUBE_SAFE_SEARCH_LIST_URL: &str =
     "https://raw.githubusercontent.com/AdguardTeam/HostlistsRegistry/refs/heads/main/assets/youtube_safe_search.txt";
 
+/// Map a blocklist URL to its feature ID, if it belongs to a known feature.
+pub fn url_to_feature_id(url: &str) -> Option<&'static str> {
+    match url {
+        BLOCKLIST_ADS_MALWARE => Some("ads_malware"),
+        BLOCKLIST_NSFW => Some("nsfw"),
+        _ => None,
+    }
+}
+
 /// A safe search DNS rewrite target.
 #[derive(Debug, Clone)]
 pub enum SafeSearchTarget {
@@ -39,7 +48,7 @@ pub struct FeatureDefinition {
 pub struct FeatureManager {
     features: Arc<RwLock<Vec<FeatureDefinition>>>,
     safe_search_enabled: Arc<RwLock<bool>>,
-    safe_search_rules: Arc<RwLock<HashMap<String, SafeSearchTarget>>>,
+    safe_search_rules: Arc<RwLock<HashMap<String, (SafeSearchTarget, &'static str)>>>,
     blocklist: BlocklistManager,
     upstream: Option<UpstreamForwarder>,
 }
@@ -149,7 +158,7 @@ impl FeatureManager {
         if feature_id == "safe_search" {
             if enabled {
                 info!("Enabling safe search, loading rules...");
-                match Self::fetch_rules(SAFE_SEARCH_LIST_URL).await {
+                match Self::fetch_rules(SAFE_SEARCH_LIST_URL, "safe_search").await {
                     Ok(rules) => {
                         info!("Loaded {} safe search rewrite rules", rules.len());
                         let mut all_rules = self.safe_search_rules.write().await;
@@ -164,7 +173,9 @@ impl FeatureManager {
                 let mut all_rules = self.safe_search_rules.write().await;
                 all_rules.clear();
                 if other_safe_search_enabled {
-                    if let Ok(rules) = Self::fetch_rules(YOUTUBE_SAFE_SEARCH_LIST_URL).await {
+                    if let Ok(rules) =
+                        Self::fetch_rules(YOUTUBE_SAFE_SEARCH_LIST_URL, "youtube_safe_search").await
+                    {
                         all_rules.extend(rules);
                     }
                 } else {
@@ -179,7 +190,7 @@ impl FeatureManager {
         if feature_id == "youtube_safe_search" {
             if enabled {
                 info!("Enabling YouTube safe search, loading rules...");
-                match Self::fetch_rules(YOUTUBE_SAFE_SEARCH_LIST_URL).await {
+                match Self::fetch_rules(YOUTUBE_SAFE_SEARCH_LIST_URL, "youtube_safe_search").await {
                     Ok(rules) => {
                         info!("Loaded {} YouTube safe search rewrite rules", rules.len());
                         let mut all_rules = self.safe_search_rules.write().await;
@@ -194,7 +205,9 @@ impl FeatureManager {
                 let mut all_rules = self.safe_search_rules.write().await;
                 all_rules.clear();
                 if other_safe_search_enabled {
-                    if let Ok(rules) = Self::fetch_rules(SAFE_SEARCH_LIST_URL).await {
+                    if let Ok(rules) =
+                        Self::fetch_rules(SAFE_SEARCH_LIST_URL, "safe_search").await
+                    {
                         all_rules.extend(rules);
                     }
                 } else {
@@ -232,7 +245,11 @@ impl FeatureManager {
     }
 
     /// Get safe search rewrite target for a domain, if safe search is on.
-    pub async fn get_safe_search_target(&self, domain: &str) -> Option<SafeSearchTarget> {
+    /// Returns (target, feature_id) where feature_id is "safe_search" or "youtube_safe_search".
+    pub async fn get_safe_search_target(
+        &self,
+        domain: &str,
+    ) -> Option<(SafeSearchTarget, &'static str)> {
         if !*self.safe_search_enabled.read().await {
             return None;
         }
@@ -245,10 +262,17 @@ impl FeatureManager {
     }
 
     /// Fetch and parse AdGuard DNS rewrite rules from a URL.
-    async fn fetch_rules(url: &str) -> anyhow::Result<HashMap<String, SafeSearchTarget>> {
+    async fn fetch_rules(
+        url: &str,
+        feature_id: &'static str,
+    ) -> anyhow::Result<HashMap<String, (SafeSearchTarget, &'static str)>> {
         let resp = reqwest::get(url).await?;
         let content = resp.text().await?;
-        let mut rules = parse_safe_search_rules(&content);
+        let raw_rules = parse_safe_search_rules(&content);
+        let mut rules: HashMap<String, (SafeSearchTarget, &'static str)> = raw_rules
+            .into_iter()
+            .map(|(k, v)| (k, (v, feature_id)))
+            .collect();
 
         // The upstream AdGuard list only covers www.youtube.com but not the bare
         // youtube.com domain. Browsers that navigate to youtube.com bypass the
@@ -258,7 +282,10 @@ impl FeatureManager {
             let extra = ["youtube.com", "youtubekids.com", "www.youtubekids.com"];
             for domain in extra {
                 rules.entry(domain.to_string()).or_insert_with(|| {
-                    SafeSearchTarget::Cname("restrictmoderate.youtube.com".to_string())
+                    (
+                        SafeSearchTarget::Cname("restrictmoderate.youtube.com".to_string()),
+                        feature_id,
+                    )
                 });
             }
         }

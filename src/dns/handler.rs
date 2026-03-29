@@ -1,13 +1,15 @@
-use crate::blocklist::BlocklistManager;
+use crate::blocklist::{BlockResult, BlocklistManager};
 use crate::config::BlockingMode;
 use crate::dns::upstream::UpstreamForwarder;
-use crate::features::{FeatureManager, SafeSearchTarget};
+use crate::features::{url_to_feature_id, FeatureManager, SafeSearchTarget};
+use crate::query_log::{anonymize_ip, LogEntry, QueryLog};
 use crate::stats::{QueryLogEntry, Stats};
 use chrono::Utc;
 use hickory_proto::op::{Header, Message, MessageType, OpCode, ResponseCode};
 use hickory_proto::rr::{Name, RData, Record, RecordType};
 use hickory_proto::serialize::binary::BinDecodable;
 use std::net::Ipv4Addr;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::RwLock;
@@ -22,6 +24,8 @@ pub async fn process_dns_query(
     stats: &Stats,
     features: &FeatureManager,
     blocking_mode: &Arc<RwLock<BlockingMode>>,
+    query_log: &QueryLog,
+    anonymize_ip_flag: &Arc<AtomicBool>,
 ) -> anyhow::Result<Vec<u8>> {
     let start = Instant::now();
     let request = Message::from_bytes(packet)?;
@@ -40,9 +44,15 @@ pub async fn process_dns_query(
         client_ip, domain_trimmed, query_type
     );
 
+    let client_ip_stored = if anonymize_ip_flag.load(Ordering::Relaxed) {
+        anonymize_ip(client_ip)
+    } else {
+        client_ip.to_string()
+    };
+
     // Check safe search rewriting (A and AAAA queries)
     if query_type == RecordType::A || query_type == RecordType::AAAA {
-        if let Some(target) = features.get_safe_search_target(domain_trimmed).await {
+        if let Some((target, feature_id)) = features.get_safe_search_target(domain_trimmed).await {
             let response = match (&target, query_type) {
                 (SafeSearchTarget::A(ip), RecordType::A) => {
                     debug!("Safe search rewrite: {} -> {}", domain_trimmed, ip);
@@ -66,6 +76,7 @@ pub async fn process_dns_query(
 
             if let Some(response) = response {
                 let response_bytes = response.to_vec()?;
+                let elapsed = start.elapsed().as_millis() as u64;
 
                 stats.record_query(QueryLogEntry {
                     timestamp: Utc::now(),
@@ -73,7 +84,20 @@ pub async fn process_dns_query(
                     query_type: format!("{:?}", query_type),
                     client_ip: client_ip.to_string(),
                     blocked: false,
-                    response_time_ms: start.elapsed().as_millis() as u64,
+                    response_time_ms: elapsed,
+                    upstream: Some("safe-search".to_string()),
+                });
+
+                query_log.insert(LogEntry {
+                    id: 0,
+                    timestamp: Utc::now(),
+                    domain: domain_trimmed.to_string(),
+                    query_type: format!("{:?}", query_type),
+                    client_ip: client_ip_stored,
+                    status: "rewritten".to_string(),
+                    block_source: None,
+                    block_feature: Some(feature_id.to_string()),
+                    response_time_ms: elapsed,
                     upstream: Some("safe-search".to_string()),
                 });
 
@@ -83,10 +107,21 @@ pub async fn process_dns_query(
     }
 
     // Check blocklist
-    if blocklist.is_blocked(domain_trimmed).await {
+    let block_result = blocklist.check_domain(domain_trimmed).await;
+    if !matches!(block_result, BlockResult::Allowed) {
         let mode = blocking_mode.read().await;
         let response = build_blocked_response(&request, &domain, query_type, &mode);
         let response_bytes = response.to_vec()?;
+        let elapsed = start.elapsed().as_millis() as u64;
+
+        let (block_source, block_feature) = match &block_result {
+            BlockResult::Blocked { source_url } => {
+                let feature = url_to_feature_id(source_url).map(String::from);
+                (Some(source_url.clone()), feature)
+            }
+            BlockResult::BlockedCustom => (Some("custom".to_string()), None),
+            BlockResult::Allowed => unreachable!(),
+        };
 
         stats.record_query(QueryLogEntry {
             timestamp: Utc::now(),
@@ -94,7 +129,20 @@ pub async fn process_dns_query(
             query_type: format!("{:?}", query_type),
             client_ip: client_ip.to_string(),
             blocked: true,
-            response_time_ms: start.elapsed().as_millis() as u64,
+            response_time_ms: elapsed,
+            upstream: None,
+        });
+
+        query_log.insert(LogEntry {
+            id: 0,
+            timestamp: Utc::now(),
+            domain: domain_trimmed.to_string(),
+            query_type: format!("{:?}", query_type),
+            client_ip: client_ip_stored,
+            status: "blocked".to_string(),
+            block_source,
+            block_feature,
+            response_time_ms: elapsed,
             upstream: None,
         });
 
@@ -104,6 +152,7 @@ pub async fn process_dns_query(
 
     // Forward to upstream
     let (response_bytes, upstream_used) = upstream.forward(packet).await?;
+    let elapsed = start.elapsed().as_millis() as u64;
 
     stats.record_query(QueryLogEntry {
         timestamp: Utc::now(),
@@ -111,7 +160,20 @@ pub async fn process_dns_query(
         query_type: format!("{:?}", query_type),
         client_ip: client_ip.to_string(),
         blocked: false,
-        response_time_ms: start.elapsed().as_millis() as u64,
+        response_time_ms: elapsed,
+        upstream: Some(upstream_used.clone()),
+    });
+
+    query_log.insert(LogEntry {
+        id: 0,
+        timestamp: Utc::now(),
+        domain: domain_trimmed.to_string(),
+        query_type: format!("{:?}", query_type),
+        client_ip: client_ip_stored,
+        status: "allowed".to_string(),
+        block_source: None,
+        block_feature: None,
+        response_time_ms: elapsed,
         upstream: Some(upstream_used),
     });
 
@@ -190,9 +252,6 @@ fn build_blocked_response(
 
     match mode {
         BlockingMode::Default | BlockingMode::NullIp => {
-            // Both Default and NullIp return 0.0.0.0 / :: for adblock-style rules.
-            // Default mode would also handle hosts-style rules differently, but
-            // since we don't track rule origin here, it behaves the same as NullIp.
             match query_type {
                 RecordType::A => {
                     let rdata = RData::A("0.0.0.0".parse().unwrap());
@@ -227,9 +286,6 @@ fn build_blocked_response(
 }
 
 /// Build a CNAME rewrite response: returns CNAME record + resolved address records.
-/// This is needed for safe search enforcement (e.g. YouTube restricted mode)
-/// where the client must see the CNAME in the response.
-/// Resolves the CNAME target for the requested query_type (A or AAAA).
 async fn build_cname_rewrite_response(
     request: &Message,
     domain: &str,
@@ -288,7 +344,6 @@ async fn build_cname_rewrite_response(
     response.add_answer(cname_record);
 
     // Add address records from upstream resolution of the CNAME target
-    // Override TTL to match our CNAME TTL so the rewrite stays cached together
     for answer in upstream_resp.answers() {
         match (answer.data(), query_type) {
             (RData::A(_), RecordType::A) | (RData::AAAA(_), RecordType::AAAA) => {

@@ -3,7 +3,9 @@ use crate::config::BlockingMode;
 use crate::dns::handler;
 use crate::dns::upstream::UpstreamForwarder;
 use crate::features::FeatureManager;
+use crate::query_log::QueryLog;
 use crate::stats::Stats;
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{debug, error, info};
@@ -16,6 +18,8 @@ pub async fn run(
     features: FeatureManager,
     blocking_mode: Arc<RwLock<BlockingMode>>,
     quic_config: quinn::ServerConfig,
+    query_log: QueryLog,
+    anonymize_ip: Arc<AtomicBool>,
 ) -> anyhow::Result<()> {
     let endpoint = quinn::Endpoint::server(quic_config, addr.parse()?)?;
     info!("DoQ listener ready on {}", addr);
@@ -26,6 +30,8 @@ pub async fn run(
         let up = upstream.clone();
         let ft = features.clone();
         let bm = blocking_mode.clone();
+        let ql = query_log.clone();
+        let anon = anonymize_ip.clone();
 
         tokio::spawn(async move {
             match incoming.await {
@@ -42,11 +48,14 @@ pub async fn run(
                                 let ft = ft.clone();
                                 let bm = bm.clone();
                                 let cip = client_ip.clone();
+                                let ql = ql.clone();
+                                let anon = anon.clone();
 
                                 tokio::spawn(async move {
-                                    if let Err(e) =
-                                        handle_doq_stream(send, recv, &cip, &bl, &st, &up, &ft, &bm)
-                                            .await
+                                    if let Err(e) = handle_doq_stream(
+                                        send, recv, &cip, &bl, &st, &up, &ft, &bm, &ql, &anon,
+                                    )
+                                    .await
                                     {
                                         debug!("DoQ stream error from {}: {}", cip, e);
                                     }
@@ -80,6 +89,8 @@ async fn handle_doq_stream(
     upstream: &UpstreamForwarder,
     features: &FeatureManager,
     blocking_mode: &Arc<RwLock<BlockingMode>>,
+    query_log: &QueryLog,
+    anonymize_ip: &Arc<AtomicBool>,
 ) -> anyhow::Result<()> {
     let mut len_buf = [0u8; 2];
     recv.read_exact(&mut len_buf).await?;
@@ -100,6 +111,8 @@ async fn handle_doq_stream(
         stats,
         features,
         blocking_mode,
+        query_log,
+        anonymize_ip,
     )
     .await?;
 

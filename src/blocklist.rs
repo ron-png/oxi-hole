@@ -3,6 +3,17 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{info, warn};
 
+/// Result of checking whether a domain is blocked.
+#[derive(Debug, Clone, PartialEq)]
+pub enum BlockResult {
+    /// Domain is not blocked.
+    Allowed,
+    /// Domain is blocked by a blocklist source (URL).
+    Blocked { source_url: String },
+    /// Domain is blocked by a custom user entry.
+    BlockedCustom,
+}
+
 /// Manages the set of blocked domains loaded from blocklists, custom entries, and allowlist.
 #[derive(Clone)]
 pub struct BlocklistManager {
@@ -172,6 +183,7 @@ impl BlocklistManager {
     }
 
     /// Check if a domain should be blocked.
+    #[allow(dead_code)]
     pub async fn is_blocked(&self, domain: &str) -> bool {
         if !*self.enabled.read().await {
             return false;
@@ -200,6 +212,69 @@ impl BlocklistManager {
         }
 
         false
+    }
+
+    /// Check if a domain is blocked and return which source caused it.
+    pub async fn check_domain(&self, domain: &str) -> BlockResult {
+        if !*self.enabled.read().await {
+            return BlockResult::Allowed;
+        }
+
+        let normalized = normalize_domain(domain);
+        let allowlist = self.allowlist.read().await;
+
+        // Check exact match and parent domains against the allowlist
+        if allowlist.contains(&normalized) {
+            return BlockResult::Allowed;
+        }
+        let parts: Vec<&str> = normalized.split('.').collect();
+        for i in 1..parts.len().saturating_sub(1) {
+            let parent = parts[i..].join(".");
+            if allowlist.contains(&parent) {
+                return BlockResult::Allowed;
+            }
+        }
+
+        let blocked = self.blocked.read().await;
+
+        // Check exact match and parent-domain matches
+        let matched_domain = if blocked.contains(&normalized) {
+            Some(normalized.clone())
+        } else {
+            let parts: Vec<&str> = normalized.split('.').collect();
+            let mut found = None;
+            for i in 1..parts.len().saturating_sub(1) {
+                let parent = parts[i..].join(".");
+                if blocked.contains(&parent) {
+                    found = Some(parent);
+                    break;
+                }
+            }
+            found
+        };
+
+        let Some(matched) = matched_domain else {
+            return BlockResult::Allowed;
+        };
+
+        // Determine which source owns this domain
+        let src_map = self.source_domains.read().await;
+        for (source_url, domains) in src_map.iter() {
+            if domains.contains(&matched) {
+                return BlockResult::Blocked {
+                    source_url: source_url.clone(),
+                };
+            }
+        }
+
+        if self.custom_blocked.read().await.contains(&matched) {
+            return BlockResult::BlockedCustom;
+        }
+
+        // In blocked set but source unknown (shouldn't happen normally)
+        BlockResult::Blocked {
+            source_url: "unknown".to_string(),
+        }
     }
 
     pub async fn set_enabled(&self, enabled: bool) {

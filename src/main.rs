@@ -2,6 +2,7 @@ mod blocklist;
 mod config;
 mod dns;
 mod features;
+mod query_log;
 mod stats;
 mod tls;
 mod update;
@@ -107,6 +108,21 @@ async fn main() -> anyhow::Result<()> {
         config.blocking.blocking_mode.clone(),
     ));
 
+    // Open persistent query log database
+    let db_path = config_path
+        .parent()
+        .unwrap_or(std::path::Path::new("."))
+        .join("query_log.db");
+    let query_log = query_log::QueryLog::open(&db_path).await?;
+
+    // Shared log settings
+    let anonymize_ip = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(
+        config.log.anonymize_client_ip,
+    ));
+    let log_retention_days = std::sync::Arc::new(tokio::sync::RwLock::new(
+        config.log.retention_days,
+    ));
+
     // Start DNS server (all protocols)
     let upstream_for_web = upstream.clone();
     let (dns_ready_tx, dns_ready_rx) = tokio::sync::oneshot::channel::<()>();
@@ -120,6 +136,8 @@ async fn main() -> anyhow::Result<()> {
         server_tls_config,
         quic_server_config,
         Some(dns_ready_tx),
+        query_log.clone(),
+        anonymize_ip.clone(),
     );
 
     let dns_handle = tokio::spawn(async move {
@@ -167,6 +185,21 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
+    // Spawn background log retention cleanup task (runs hourly)
+    {
+        let ql = query_log.clone();
+        let retention = log_retention_days.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
+                let days = *retention.read().await;
+                if let Err(e) = ql.purge_older_than(days).await {
+                    tracing::warn!("Log retention purge failed: {}", e);
+                }
+            }
+        });
+    }
+
     // Restore enabled features from config
     for feature_id in &config.blocking.enabled_features {
         info!("Restoring feature: {}", feature_id);
@@ -184,6 +217,9 @@ async fn main() -> anyhow::Result<()> {
         blocklist_update_interval,
         blocking_mode,
         config_path: config_path.clone(),
+        query_log,
+        log_retention_days,
+        anonymize_ip,
     };
 
     let web_listen = config.web.listen.clone();

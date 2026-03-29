@@ -3,7 +3,9 @@ use crate::config::BlockingMode;
 use crate::dns::handler;
 use crate::dns::upstream::UpstreamForwarder;
 use crate::features::FeatureManager;
+use crate::query_log::QueryLog;
 use crate::stats::Stats;
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use tokio::net::UdpSocket;
 use tokio::sync::RwLock;
@@ -17,6 +19,8 @@ pub async fn run(
     features: FeatureManager,
     blocking_mode: Arc<RwLock<BlockingMode>>,
     ready_tx: Option<tokio::sync::oneshot::Sender<()>>,
+    query_log: QueryLog,
+    anonymize_ip: Arc<AtomicBool>,
 ) -> anyhow::Result<()> {
     let socket = Arc::new(UdpSocket::bind(&addr).await?);
     if let Some(tx) = ready_tx {
@@ -40,10 +44,16 @@ pub async fn run(
         let up = upstream.clone();
         let ft = features.clone();
         let bm = blocking_mode.clone();
+        let ql = query_log.clone();
+        let anon = anonymize_ip.clone();
 
         tokio::spawn(async move {
             let client_ip = src.ip().to_string();
-            match handler::process_dns_query(&packet, &client_ip, &bl, &up, &st, &ft, &bm).await {
+            match handler::process_dns_query(
+                &packet, &client_ip, &bl, &up, &st, &ft, &bm, &ql, &anon,
+            )
+            .await
+            {
                 Ok(response) => {
                     if let Err(e) = sock.send_to(&response, src).await {
                         debug!("Failed to send UDP response to {}: {}", src, e);

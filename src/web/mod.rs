@@ -2,6 +2,7 @@ use crate::blocklist::BlocklistManager;
 use crate::config::{BlockingMode, Config};
 use crate::dns::upstream::UpstreamForwarder;
 use crate::features::FeatureManager;
+use crate::query_log::QueryLog;
 use crate::stats::Stats;
 use crate::update::UpdateChecker;
 use axum::extract::State;
@@ -12,6 +13,7 @@ use axum::Json;
 use axum::Router;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use std::sync::atomic::AtomicBool;
 use tracing::info;
 
 #[derive(Clone)]
@@ -25,6 +27,9 @@ pub struct AppState {
     pub blocklist_update_interval: std::sync::Arc<tokio::sync::RwLock<u64>>,
     pub blocking_mode: std::sync::Arc<tokio::sync::RwLock<BlockingMode>>,
     pub config_path: PathBuf,
+    pub query_log: QueryLog,
+    pub log_retention_days: std::sync::Arc<tokio::sync::RwLock<u32>>,
+    pub anonymize_ip: std::sync::Arc<AtomicBool>,
 }
 
 impl AppState {
@@ -56,6 +61,10 @@ impl AppState {
             .collect();
         config.system.auto_update = *self.auto_update.read().await;
         config.blocking.blocking_mode = self.blocking_mode.read().await.clone();
+        config.log.retention_days = *self.log_retention_days.read().await;
+        config.log.anonymize_client_ip = self
+            .anonymize_ip
+            .load(std::sync::atomic::Ordering::Relaxed);
 
         if let Err(e) = config.save(&self.config_path) {
             tracing::warn!("Failed to save config: {}", e);
@@ -115,6 +124,10 @@ pub async fn run_web_server(listen: &str, state: AppState) -> anyhow::Result<()>
         .route("/api/system/version/check", post(api_version_check))
         .route("/api/system/update", post(api_perform_update))
         .route("/api/system/restart", post(api_restart))
+        // Query log
+        .route("/api/logs", get(api_logs))
+        .route("/api/logs/settings", get(api_get_log_settings))
+        .route("/api/logs/settings", post(api_set_log_settings))
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind(listen).await?;
@@ -518,5 +531,85 @@ async fn api_restart() -> StatusCode {
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
         std::process::exit(0);
     });
+    StatusCode::OK
+}
+
+// ==================== Query Log ====================
+
+#[derive(Deserialize)]
+struct LogsQueryParams {
+    #[serde(default)]
+    search: Option<String>,
+    #[serde(default)]
+    status: Option<String>,
+    #[serde(default)]
+    before_id: Option<i64>,
+    #[serde(default = "default_log_limit")]
+    limit: Option<usize>,
+}
+
+fn default_log_limit() -> Option<usize> {
+    Some(100)
+}
+
+async fn api_logs(
+    State(state): State<AppState>,
+    axum::extract::Query(params): axum::extract::Query<LogsQueryParams>,
+) -> Result<Json<crate::query_log::LogPage>, StatusCode> {
+    let query_params = crate::query_log::LogQueryParams {
+        search: params.search,
+        status: params.status,
+        before_id: params.before_id,
+        limit: params.limit.unwrap_or(100),
+    };
+
+    match state.query_log.search(query_params).await {
+        Ok(page) => Ok(Json(page)),
+        Err(e) => {
+            tracing::error!("Log query failed: {}", e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct LogSettingsResponse {
+    retention_days: u32,
+    anonymize_client_ip: bool,
+}
+
+async fn api_get_log_settings(State(state): State<AppState>) -> Json<LogSettingsResponse> {
+    Json(LogSettingsResponse {
+        retention_days: *state.log_retention_days.read().await,
+        anonymize_client_ip: state
+            .anonymize_ip
+            .load(std::sync::atomic::Ordering::Relaxed),
+    })
+}
+
+#[derive(Deserialize)]
+struct LogSettingsRequest {
+    #[serde(default)]
+    retention_days: Option<u32>,
+    #[serde(default)]
+    anonymize_client_ip: Option<bool>,
+}
+
+async fn api_set_log_settings(
+    State(state): State<AppState>,
+    Json(req): Json<LogSettingsRequest>,
+) -> StatusCode {
+    if let Some(days) = req.retention_days {
+        let clamped = days.clamp(1, 90);
+        *state.log_retention_days.write().await = clamped;
+        info!("Log retention set to {} days", clamped);
+    }
+    if let Some(anonymize) = req.anonymize_client_ip {
+        state
+            .anonymize_ip
+            .store(anonymize, std::sync::atomic::Ordering::Relaxed);
+        info!("Client IP anonymization set to {}", anonymize);
+    }
+    state.save_config().await;
     StatusCode::OK
 }

@@ -3,7 +3,9 @@ use crate::config::BlockingMode;
 use crate::dns::handler;
 use crate::dns::upstream::UpstreamForwarder;
 use crate::features::FeatureManager;
+use crate::query_log::QueryLog;
 use crate::stats::Stats;
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
@@ -19,6 +21,8 @@ pub async fn run(
     features: FeatureManager,
     blocking_mode: Arc<RwLock<BlockingMode>>,
     tls_config: Arc<rustls::ServerConfig>,
+    query_log: QueryLog,
+    anonymize_ip: Arc<AtomicBool>,
 ) -> anyhow::Result<()> {
     let listener = TcpListener::bind(&addr).await?;
     let acceptor = TlsAcceptor::from(tls_config);
@@ -39,6 +43,8 @@ pub async fn run(
         let up = upstream.clone();
         let ft = features.clone();
         let bm = blocking_mode.clone();
+        let ql = query_log.clone();
+        let anon = anonymize_ip.clone();
 
         tokio::spawn(async move {
             match acceptor.accept(tcp_stream).await {
@@ -51,6 +57,8 @@ pub async fn run(
                         &up,
                         &ft,
                         &bm,
+                        &ql,
+                        &anon,
                     )
                     .await
                     {
@@ -63,6 +71,7 @@ pub async fn run(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn handle_dot_connection(
     mut stream: tokio_rustls::server::TlsStream<tokio::net::TcpStream>,
     client_ip: &str,
@@ -71,6 +80,8 @@ async fn handle_dot_connection(
     upstream: &UpstreamForwarder,
     features: &FeatureManager,
     blocking_mode: &Arc<RwLock<BlockingMode>>,
+    query_log: &QueryLog,
+    anonymize_ip: &Arc<AtomicBool>,
 ) -> anyhow::Result<()> {
     loop {
         let mut len_buf = [0u8; 2];
@@ -95,6 +106,8 @@ async fn handle_dot_connection(
             stats,
             features,
             blocking_mode,
+            query_log,
+            anonymize_ip,
         )
         .await?;
 

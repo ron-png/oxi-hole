@@ -9,7 +9,9 @@ mod listener_udp;
 use crate::blocklist::BlocklistManager;
 use crate::config::{BlockingMode, DnsConfig};
 use crate::features::FeatureManager;
+use crate::query_log::QueryLog;
 use crate::stats::Stats;
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::info;
@@ -26,6 +28,8 @@ pub struct DnsServer {
     tls_config: Option<Arc<rustls::ServerConfig>>,
     quic_config: Option<quinn::ServerConfig>,
     ready_tx: Option<tokio::sync::oneshot::Sender<()>>,
+    query_log: QueryLog,
+    anonymize_ip: Arc<AtomicBool>,
 }
 
 impl DnsServer {
@@ -40,6 +44,8 @@ impl DnsServer {
         tls_config: Option<Arc<rustls::ServerConfig>>,
         quic_config: Option<quinn::ServerConfig>,
         ready_tx: Option<tokio::sync::oneshot::Sender<()>>,
+        query_log: QueryLog,
+        anonymize_ip: Arc<AtomicBool>,
     ) -> Self {
         Self {
             config,
@@ -51,6 +57,8 @@ impl DnsServer {
             tls_config,
             quic_config,
             ready_tx,
+            query_log,
+            anonymize_ip,
         }
     }
 
@@ -66,9 +74,13 @@ impl DnsServer {
             let ft = self.features.clone();
             let bm = self.blocking_mode.clone();
             let ready_tx = self.ready_tx.take();
+            let ql = self.query_log.clone();
+            let anon = self.anonymize_ip.clone();
             info!("Starting plain DNS (UDP) on {}", addr);
             handles.push(tokio::spawn(async move {
-                if let Err(e) = listener_udp::run(addr, bl, st, up, ft, bm, ready_tx).await {
+                if let Err(e) =
+                    listener_udp::run(addr, bl, st, up, ft, bm, ready_tx, ql, anon).await
+                {
                     tracing::error!("UDP DNS listener error: {}", e);
                 }
             }));
@@ -83,9 +95,11 @@ impl DnsServer {
             let ft = self.features.clone();
             let bm = self.blocking_mode.clone();
             let tls = tls_config.clone();
+            let ql = self.query_log.clone();
+            let anon = self.anonymize_ip.clone();
             info!("Starting DNS-over-TLS on {}", addr);
             handles.push(tokio::spawn(async move {
-                if let Err(e) = listener_dot::run(addr, bl, st, up, ft, bm, tls).await {
+                if let Err(e) = listener_dot::run(addr, bl, st, up, ft, bm, tls, ql, anon).await {
                     tracing::error!("DoT listener error: {}", e);
                 }
             }));
@@ -100,9 +114,11 @@ impl DnsServer {
             let ft = self.features.clone();
             let bm = self.blocking_mode.clone();
             let tls = tls_config.clone();
+            let ql = self.query_log.clone();
+            let anon = self.anonymize_ip.clone();
             info!("Starting DNS-over-HTTPS on {}", addr);
             handles.push(tokio::spawn(async move {
-                if let Err(e) = listener_doh::run(addr, bl, st, up, ft, bm, tls).await {
+                if let Err(e) = listener_doh::run(addr, bl, st, up, ft, bm, tls, ql, anon).await {
                     tracing::error!("DoH listener error: {}", e);
                 }
             }));
@@ -117,9 +133,13 @@ impl DnsServer {
                 let up = self.upstream.clone();
                 let ft = self.features.clone();
                 let bm = self.blocking_mode.clone();
+                let ql = self.query_log.clone();
+                let anon = self.anonymize_ip.clone();
                 info!("Starting DNS-over-QUIC on {}", addr);
                 handles.push(tokio::spawn(async move {
-                    if let Err(e) = listener_doq::run(addr, bl, st, up, ft, bm, quic_config).await {
+                    if let Err(e) =
+                        listener_doq::run(addr, bl, st, up, ft, bm, quic_config, ql, anon).await
+                    {
                         tracing::error!("DoQ listener error: {}", e);
                     }
                 }));
