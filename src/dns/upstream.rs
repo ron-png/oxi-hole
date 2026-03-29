@@ -402,6 +402,12 @@ fn rewrite_response_ttls(
     Ok(new_msg.to_vec()?)
 }
 
+/// Build a normalized cache key from domain and query type.
+fn make_cache_key(domain: &str, query_type: u16) -> (String, u16) {
+    let normalized = domain.to_ascii_lowercase().trim_end_matches('.').to_string();
+    (normalized, query_type)
+}
+
 /// Handles forwarding DNS queries to upstream servers with multi-protocol support.
 #[derive(Clone)]
 pub struct UpstreamForwarder {
@@ -453,6 +459,34 @@ impl UpstreamForwarder {
 
     pub fn set_use_root_servers(&self, enabled: bool) {
         self.use_root_servers.store(enabled, Ordering::Relaxed);
+    }
+
+    /// Get cache stats: (size, hits, misses).
+    pub fn cache_stats(&self) -> (usize, u64, u64) {
+        (
+            self.cache.len(),
+            self.cache_hits.load(Ordering::Relaxed),
+            self.cache_misses.load(Ordering::Relaxed),
+        )
+    }
+
+    /// Flush the cache and reset counters.
+    pub fn cache_flush(&self) {
+        self.cache.clear();
+        self.cache_hits.store(0, Ordering::Relaxed);
+        self.cache_misses.store(0, Ordering::Relaxed);
+    }
+
+    /// Set whether caching is enabled.
+    pub fn set_cache_enabled(&self, enabled: bool) {
+        self.cache_enabled.store(enabled, Ordering::Relaxed);
+    }
+
+    /// Remove expired entries from the cache. Returns number removed.
+    pub fn evict_expired(&self) -> usize {
+        let before = self.cache.len();
+        self.cache.retain(|_, entry| !entry.is_expired());
+        before - self.cache.len()
     }
 
     #[allow(dead_code)]
@@ -564,47 +598,130 @@ impl UpstreamForwarder {
     /// When multiple upstreams are configured, queries all in parallel and
     /// returns the fastest successful response.
     pub async fn forward(&self, packet: &[u8]) -> anyhow::Result<(Vec<u8>, String)> {
-        if self.use_root_servers.load(Ordering::Relaxed) {
-            return self.forward_iterative(packet).await;
-        }
+        use hickory_proto::serialize::binary::BinDecodable;
 
-        let upstreams = self.upstreams.read().unwrap().clone();
-
-        if upstreams.len() == 1 {
-            let upstream = &upstreams[0];
-            let response = self.forward_single(packet, upstream).await?;
-            return Ok((response, upstream.label()));
-        }
-
-        // Query all upstreams in parallel, return the fastest success
-        let (tx, mut rx) = tokio::sync::mpsc::channel(upstreams.len());
-
-        for upstream in &upstreams {
-            let tx = tx.clone();
-            let forwarder = self.clone();
-            let packet = packet.to_vec();
-            let label = upstream.label();
-            let upstream = upstream.clone();
-
-            tokio::spawn(async move {
-                let result = forwarder.forward_single(&packet, &upstream).await;
-                let _ = tx.send((result, label)).await;
-            });
-        }
-        drop(tx);
-
-        let mut last_err = None;
-        while let Some((result, label)) = rx.recv().await {
-            match result {
-                Ok(response) => return Ok((response, label)),
-                Err(e) => {
-                    warn!("Upstream {} failed: {}", label, e);
-                    last_err = Some(e);
+        // Try cache lookup first
+        if self.cache_enabled.load(Ordering::Relaxed) {
+            if let Ok(msg) = hickory_proto::op::Message::from_bytes(packet) {
+                if let Some(q) = msg.queries().first() {
+                    let key = make_cache_key(&q.name().to_ascii(), q.query_type().into());
+                    if let Some(entry) = self.cache.get(&key) {
+                        if !entry.is_expired() {
+                            let remaining = entry.expires_at.duration_since(Instant::now());
+                            if let Ok(rewritten) =
+                                rewrite_response_ttls(&entry.response_bytes, remaining)
+                            {
+                                // Rewrite the message ID to match the request
+                                let mut rewritten = rewritten;
+                                if rewritten.len() >= 2 {
+                                    let id_bytes = msg.header().id().to_be_bytes();
+                                    rewritten[0] = id_bytes[0];
+                                    rewritten[1] = id_bytes[1];
+                                }
+                                self.cache_hits.fetch_add(1, Ordering::Relaxed);
+                                return Ok((rewritten, "cache".to_string()));
+                            }
+                        } else {
+                            drop(entry);
+                            self.cache.remove(&key);
+                        }
+                    }
+                    self.cache_misses.fetch_add(1, Ordering::Relaxed);
                 }
             }
         }
 
-        Err(last_err.unwrap_or_else(|| anyhow::anyhow!("All upstream DNS servers failed")))
+        // Cache miss — forward to upstream or iterative
+        let result = if self.use_root_servers.load(Ordering::Relaxed) {
+            self.forward_iterative(packet).await?
+        } else {
+            let upstreams = self.upstreams.read().unwrap().clone();
+            if upstreams.len() == 1 {
+                let upstream = &upstreams[0];
+                let response = self.forward_single(packet, upstream).await?;
+                (response, upstream.label())
+            } else {
+                // Query all upstreams in parallel, return the fastest success
+                let (tx, mut rx) = tokio::sync::mpsc::channel(upstreams.len());
+                for upstream in &upstreams {
+                    let tx = tx.clone();
+                    let forwarder = self.clone();
+                    let packet = packet.to_vec();
+                    let label = upstream.label();
+                    let upstream = upstream.clone();
+                    tokio::spawn(async move {
+                        let result = forwarder.forward_single(&packet, &upstream).await;
+                        let _ = tx.send((result, label)).await;
+                    });
+                }
+                drop(tx);
+                let mut last_err = None;
+                while let Some((result, label)) = rx.recv().await {
+                    match result {
+                        Ok(response) => {
+                            // Store in cache before returning
+                            if self.cache_enabled.load(Ordering::Relaxed) {
+                                if let Ok(resp_msg) =
+                                    hickory_proto::op::Message::from_bytes(&response)
+                                {
+                                    if let Ok(orig) =
+                                        hickory_proto::op::Message::from_bytes(&packet)
+                                    {
+                                        if let Some(q) = orig.queries().first() {
+                                            let key = make_cache_key(
+                                                &q.name().to_ascii(),
+                                                q.query_type().into(),
+                                            );
+                                            let ttl = extract_min_ttl(&resp_msg);
+                                            self.cache.insert(
+                                                key,
+                                                CacheEntry {
+                                                    response_bytes: response.clone(),
+                                                    expires_at: Instant::now()
+                                                        + Duration::from_secs(ttl as u64),
+                                                    inserted_at: Instant::now(),
+                                                },
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                            return Ok((response, label));
+                        }
+                        Err(e) => {
+                            warn!("Upstream {} failed: {}", label, e);
+                            last_err = Some(e);
+                        }
+                    }
+                }
+                return Err(last_err
+                    .unwrap_or_else(|| anyhow::anyhow!("All upstream DNS servers failed")));
+            }
+        };
+
+        // Store result in cache
+        let (ref response_bytes, ref _label) = result;
+        if self.cache_enabled.load(Ordering::Relaxed) {
+            if let Ok(resp_msg) = hickory_proto::op::Message::from_bytes(response_bytes) {
+                if let Ok(orig) = hickory_proto::op::Message::from_bytes(packet) {
+                    if let Some(q) = orig.queries().first() {
+                        let key =
+                            make_cache_key(&q.name().to_ascii(), q.query_type().into());
+                        let ttl = extract_min_ttl(&resp_msg);
+                        self.cache.insert(
+                            key,
+                            CacheEntry {
+                                response_bytes: response_bytes.clone(),
+                                expires_at: Instant::now() + Duration::from_secs(ttl as u64),
+                                inserted_at: Instant::now(),
+                            },
+                        );
+                    }
+                }
+            }
+        }
+
+        Ok(result)
     }
 
     /// Forward a DNS query to a single upstream server.
@@ -1445,5 +1562,19 @@ mod cache_tests {
 
         let parsed = Message::from_bytes(&rewritten).unwrap();
         assert_eq!(parsed.answers()[0].ttl(), 1);
+    }
+
+    #[test]
+    fn cache_key_is_case_insensitive() {
+        let key1 = make_cache_key("Example.COM.", 1);
+        let key2 = make_cache_key("example.com.", 1);
+        assert_eq!(key1, key2);
+    }
+
+    #[test]
+    fn cache_key_strips_trailing_dot() {
+        let key1 = make_cache_key("example.com.", 1);
+        let key2 = make_cache_key("example.com", 1);
+        assert_eq!(key1, key2);
     }
 }
