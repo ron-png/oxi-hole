@@ -511,10 +511,7 @@ struct Ipv6Request {
     enabled: bool,
 }
 
-async fn api_set_ipv6(
-    State(state): State<AppState>,
-    Json(req): Json<Ipv6Request>,
-) -> StatusCode {
+async fn api_set_ipv6(State(state): State<AppState>, Json(req): Json<Ipv6Request>) -> StatusCode {
     state
         .ipv6_enabled
         .store(req.enabled, std::sync::atomic::Ordering::Relaxed);

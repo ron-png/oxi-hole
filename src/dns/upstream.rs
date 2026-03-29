@@ -26,18 +26,18 @@ const ROOT_SERVERS: &[Ipv4Addr] = &[
 /// DNS root server addresses (IPv6).
 const ROOT_SERVERS_V6: &[Ipv6Addr] = &[
     Ipv6Addr::new(0x2001, 0x0503, 0xba3e, 0, 0, 0, 0x0002, 0x0030), // a.root-servers.net
-    Ipv6Addr::new(0x2001, 0x0500, 0x0200, 0, 0, 0, 0, 0x000b), // b.root-servers.net
-    Ipv6Addr::new(0x2001, 0x0500, 0x0002, 0, 0, 0, 0, 0x000c), // c.root-servers.net
-    Ipv6Addr::new(0x2001, 0x0500, 0x002d, 0, 0, 0, 0, 0x000d), // d.root-servers.net
-    Ipv6Addr::new(0x2001, 0x0500, 0x00a8, 0, 0, 0, 0, 0x000e), // e.root-servers.net
-    Ipv6Addr::new(0x2001, 0x0500, 0x002f, 0, 0, 0, 0, 0x000f), // f.root-servers.net
-    Ipv6Addr::new(0x2001, 0x0500, 0x0012, 0, 0, 0, 0, 0x0d0d), // g.root-servers.net
-    Ipv6Addr::new(0x2001, 0x0500, 0x0001, 0, 0, 0, 0, 0x0053), // h.root-servers.net
-    Ipv6Addr::new(0x2001, 0x07fe, 0, 0, 0, 0, 0, 0x0053),      // i.root-servers.net
+    Ipv6Addr::new(0x2001, 0x0500, 0x0200, 0, 0, 0, 0, 0x000b),      // b.root-servers.net
+    Ipv6Addr::new(0x2001, 0x0500, 0x0002, 0, 0, 0, 0, 0x000c),      // c.root-servers.net
+    Ipv6Addr::new(0x2001, 0x0500, 0x002d, 0, 0, 0, 0, 0x000d),      // d.root-servers.net
+    Ipv6Addr::new(0x2001, 0x0500, 0x00a8, 0, 0, 0, 0, 0x000e),      // e.root-servers.net
+    Ipv6Addr::new(0x2001, 0x0500, 0x002f, 0, 0, 0, 0, 0x000f),      // f.root-servers.net
+    Ipv6Addr::new(0x2001, 0x0500, 0x0012, 0, 0, 0, 0, 0x0d0d),      // g.root-servers.net
+    Ipv6Addr::new(0x2001, 0x0500, 0x0001, 0, 0, 0, 0, 0x0053),      // h.root-servers.net
+    Ipv6Addr::new(0x2001, 0x07fe, 0, 0, 0, 0, 0, 0x0053),           // i.root-servers.net
     Ipv6Addr::new(0x2001, 0x0503, 0x0c27, 0, 0, 0, 0x0002, 0x0030), // j.root-servers.net
-    Ipv6Addr::new(0x2001, 0x07fd, 0, 0, 0, 0, 0, 0x0001),      // k.root-servers.net
-    Ipv6Addr::new(0x2001, 0x0500, 0x009f, 0, 0, 0, 0, 0x0042), // l.root-servers.net
-    Ipv6Addr::new(0x2001, 0x0dc3, 0, 0, 0, 0, 0, 0x0035),      // m.root-servers.net
+    Ipv6Addr::new(0x2001, 0x07fd, 0, 0, 0, 0, 0, 0x0001),           // k.root-servers.net
+    Ipv6Addr::new(0x2001, 0x0500, 0x009f, 0, 0, 0, 0, 0x0042),      // l.root-servers.net
+    Ipv6Addr::new(0x2001, 0x0dc3, 0, 0, 0, 0, 0, 0x0035),           // m.root-servers.net
 ];
 
 const MAX_REFERRAL_DEPTH: usize = 10;
