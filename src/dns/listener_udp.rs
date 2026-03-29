@@ -11,6 +11,22 @@ use tokio::net::UdpSocket;
 use tokio::sync::RwLock;
 use tracing::{debug, error};
 
+/// Bind a UDP socket, optionally with SO_REUSEPORT for zero-downtime takeover.
+fn bind_udp_reuse_port(addr: &str) -> anyhow::Result<std::net::UdpSocket> {
+    use socket2::{Domain, Protocol, Socket, Type};
+    let sock_addr: std::net::SocketAddr = addr.parse()?;
+    let domain = if sock_addr.is_ipv4() {
+        Domain::IPV4
+    } else {
+        Domain::IPV6
+    };
+    let socket = Socket::new(domain, Type::DGRAM, Some(Protocol::UDP))?;
+    socket.set_reuse_port(true)?;
+    socket.set_nonblocking(true)?;
+    socket.bind(&sock_addr.into())?;
+    Ok(socket.into())
+}
+
 #[allow(clippy::too_many_arguments)]
 pub async fn run(
     addr: String,
@@ -22,8 +38,14 @@ pub async fn run(
     ready_tx: Option<tokio::sync::oneshot::Sender<()>>,
     query_log: QueryLog,
     anonymize_ip: Arc<AtomicBool>,
+    reuse_port: bool,
 ) -> anyhow::Result<()> {
-    let socket = Arc::new(UdpSocket::bind(&addr).await?);
+    let socket = if reuse_port {
+        let std_socket = bind_udp_reuse_port(&addr)?;
+        Arc::new(UdpSocket::from_std(std_socket)?)
+    } else {
+        Arc::new(UdpSocket::bind(&addr).await?)
+    };
     if let Some(tx) = ready_tx {
         let _ = tx.send(());
     }
