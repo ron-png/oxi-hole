@@ -28,13 +28,19 @@ const MAX_REFERRAL_DEPTH: usize = 10;
 /// Parsed upstream server specification.
 #[derive(Debug, Clone)]
 pub enum UpstreamSpec {
-    /// Plain UDP DNS (e.g., "9.9.9.10:53" or "udp://149.112.112.10:53")
+    /// Plain UDP DNS (e.g., "8.8.8.8", "9.9.9.10:53", "udp://149.112.112.10:53")
     Udp(SocketAddr),
-    /// DNS-over-TLS (e.g., "tls://9.9.9.10:853" or "tls://149.112.112.10:853")
+    /// DNS-over-TLS (e.g., "tls://9.9.9.10:853" or "tls://dns.adguard-dns.com")
     Tls { addr: SocketAddr, hostname: String },
     /// DNS-over-HTTPS (e.g., "https://dns10.quad9.net/dns-query")
-    Https { url: String },
-    /// DNS-over-QUIC (e.g., "quic://9.9.9.10:853" or "quic://149.112.112.10:853")
+    /// The resolved_addr is pre-resolved at parse time to avoid infinite loops
+    /// when oxi-hole is itself the system DNS resolver.
+    Https {
+        url: String,
+        hostname: String,
+        resolved_addr: SocketAddr,
+    },
+    /// DNS-over-QUIC (e.g., "quic://9.9.9.10:853" or "quic://dns.adguard-dns.com")
     Quic { addr: SocketAddr, hostname: String },
 }
 
@@ -44,16 +50,29 @@ impl UpstreamSpec {
             let (hostname, addr) = parse_host_port(rest, 853)?;
             Ok(Self::Tls { addr, hostname })
         } else if s.starts_with("https://") {
-            Ok(Self::Https { url: s.to_string() })
+            // Pre-resolve the hostname to an IP to avoid infinite loops when
+            // oxi-hole is the system DNS resolver (reqwest would try to resolve
+            // the DoH hostname via oxi-hole, which forwards to the same DoH
+            // server, creating an infinite loop).
+            let (hostname, resolved_addr) = resolve_url_host(s)?;
+            Ok(Self::Https {
+                url: s.to_string(),
+                hostname,
+                resolved_addr,
+            })
         } else if let Some(rest) = s.strip_prefix("quic://") {
             let (hostname, addr) = parse_host_port(rest, 853)?;
             Ok(Self::Quic { addr, hostname })
+        } else if s.starts_with("sdns://") {
+            anyhow::bail!(
+                "DNSCrypt (sdns://) is not supported. Use tls://, https://, or quic:// instead."
+            )
         } else if let Some(rest) = s.strip_prefix("udp://") {
-            let addr: SocketAddr = rest.parse()?;
+            let addr = parse_udp_addr(rest)?;
             Ok(Self::Udp(addr))
         } else {
-            // Default: plain UDP
-            let addr: SocketAddr = s.parse()?;
+            // Default: plain UDP — accept "8.8.8.8" or "8.8.8.8:53"
+            let addr = parse_udp_addr(s)?;
             Ok(Self::Udp(addr))
         }
     }
@@ -62,7 +81,7 @@ impl UpstreamSpec {
         match self {
             Self::Udp(addr) => format!("udp://{}", addr),
             Self::Tls { hostname, addr } => format!("tls://{}:{}", hostname, addr.port()),
-            Self::Https { url } => url.clone(),
+            Self::Https { url, .. } => url.clone(),
             Self::Quic { hostname, addr } => format!("quic://{}:{}", hostname, addr.port()),
         }
     }
@@ -94,6 +113,41 @@ fn resolve_hostname(host: &str, port: u16) -> anyhow::Result<SocketAddr> {
         .next()
         .ok_or_else(|| anyhow::anyhow!("Could not resolve {}", host))?;
     Ok(addr)
+}
+
+/// Parse a plain UDP address: "8.8.8.8" or "8.8.8.8:53" or "1.1.1.1:5353"
+fn parse_udp_addr(s: &str) -> anyhow::Result<SocketAddr> {
+    // Try as IP:port first
+    if let Ok(addr) = s.parse::<SocketAddr>() {
+        return Ok(addr);
+    }
+    // Try as bare IP with default port 53
+    if let Ok(ip) = s.parse::<IpAddr>() {
+        return Ok(SocketAddr::new(ip, 53));
+    }
+    anyhow::bail!(
+        "Invalid address '{}'. Expected an IP like 8.8.8.8 or 8.8.8.8:53",
+        s
+    )
+}
+
+/// Extract the hostname from an HTTPS URL and resolve it to an IP address.
+/// This pre-resolution prevents infinite loops when oxi-hole is the system resolver.
+fn resolve_url_host(url: &str) -> anyhow::Result<(String, SocketAddr)> {
+    let without_scheme = url
+        .strip_prefix("https://")
+        .ok_or_else(|| anyhow::anyhow!("Not an HTTPS URL"))?;
+    let host_part = without_scheme.split('/').next().unwrap_or(without_scheme);
+
+    // Split host and port
+    let (hostname, port) = if let Some((h, p)) = host_part.rsplit_once(':') {
+        (h, p.parse::<u16>().unwrap_or(443))
+    } else {
+        (host_part, 443)
+    };
+
+    let addr = resolve_hostname(hostname, port)?;
+    Ok((hostname.to_string(), addr))
 }
 
 /// Handles forwarding DNS queries to upstream servers with multi-protocol support.
@@ -229,7 +283,14 @@ impl UpstreamForwarder {
         match upstream {
             UpstreamSpec::Udp(addr) => self.forward_udp(packet, *addr).await,
             UpstreamSpec::Tls { addr, hostname } => self.forward_dot(packet, *addr, hostname).await,
-            UpstreamSpec::Https { url } => self.forward_doh(packet, url).await,
+            UpstreamSpec::Https {
+                url,
+                hostname,
+                resolved_addr,
+            } => {
+                self.forward_doh(packet, url, hostname, *resolved_addr)
+                    .await
+            }
             UpstreamSpec::Quic { addr, hostname } => {
                 self.forward_doq(packet, *addr, hostname).await
             }
@@ -629,9 +690,18 @@ impl UpstreamForwarder {
     }
 
     /// DNS-over-HTTPS forwarding (RFC 8484).
-    async fn forward_doh(&self, packet: &[u8], url: &str) -> anyhow::Result<Vec<u8>> {
-        // Use reqwest for HTTPS POST with application/dns-message
-        let client = reqwest::Client::builder().timeout(self.timeout).build()?;
+    /// Uses a pre-resolved IP address to avoid DNS resolution loops.
+    async fn forward_doh(
+        &self,
+        packet: &[u8],
+        url: &str,
+        hostname: &str,
+        resolved_addr: SocketAddr,
+    ) -> anyhow::Result<Vec<u8>> {
+        let client = reqwest::Client::builder()
+            .timeout(self.timeout)
+            .resolve(hostname, resolved_addr)
+            .build()?;
 
         let response = client
             .post(url)
