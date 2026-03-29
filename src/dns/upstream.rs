@@ -31,17 +31,23 @@ pub enum UpstreamSpec {
     /// Plain UDP DNS (e.g., "8.8.8.8", "9.9.9.10:53", "udp://149.112.112.10:53")
     Udp(SocketAddr),
     /// DNS-over-TLS (e.g., "tls://9.9.9.10:853" or "tls://dns.adguard-dns.com")
-    Tls { addr: SocketAddr, hostname: String },
+    Tls {
+        addrs: Vec<SocketAddr>,
+        hostname: String,
+    },
     /// DNS-over-HTTPS (e.g., "https://dns10.quad9.net/dns-query")
-    /// The resolved_addr is pre-resolved at parse time to avoid infinite loops
+    /// Addresses are pre-resolved at parse time to avoid infinite loops
     /// when oxi-hole is itself the system DNS resolver.
     Https {
         url: String,
         hostname: String,
-        resolved_addr: SocketAddr,
+        resolved_addrs: Vec<SocketAddr>,
     },
     /// DNS-over-QUIC (e.g., "quic://9.9.9.10:853" or "quic://dns.adguard-dns.com")
-    Quic { addr: SocketAddr, hostname: String },
+    Quic {
+        addrs: Vec<SocketAddr>,
+        hostname: String,
+    },
 }
 
 impl UpstreamSpec {
@@ -50,28 +56,30 @@ impl UpstreamSpec {
     pub fn parse(s: &str) -> anyhow::Result<Self> {
         if let Some(rest) = s.strip_prefix("tls://") {
             let (hostname, port, maybe_addr) = parse_host_port(rest, 853);
-            let addr = maybe_addr
-                .map(Ok)
-                .unwrap_or_else(|| resolve_hostname_blocking(&hostname, port))?;
-            Ok(Self::Tls { addr, hostname })
+            let addrs = match maybe_addr {
+                Some(a) => vec![a],
+                None => resolve_all_blocking(&hostname, port)?,
+            };
+            Ok(Self::Tls { addrs, hostname })
         } else if s.starts_with("https://") {
             let (hostname, port) = parse_url_host(s)?;
-            let resolved_addr = if let Ok(ip) = hostname.parse::<IpAddr>() {
-                SocketAddr::new(ip, port)
+            let resolved_addrs = if let Ok(ip) = hostname.parse::<IpAddr>() {
+                vec![SocketAddr::new(ip, port)]
             } else {
-                resolve_hostname_blocking(&hostname, port)?
+                resolve_all_blocking(&hostname, port)?
             };
             Ok(Self::Https {
                 url: s.to_string(),
                 hostname,
-                resolved_addr,
+                resolved_addrs,
             })
         } else if let Some(rest) = s.strip_prefix("quic://") {
             let (hostname, port, maybe_addr) = parse_host_port(rest, 853);
-            let addr = maybe_addr
-                .map(Ok)
-                .unwrap_or_else(|| resolve_hostname_blocking(&hostname, port))?;
-            Ok(Self::Quic { addr, hostname })
+            let addrs = match maybe_addr {
+                Some(a) => vec![a],
+                None => resolve_all_blocking(&hostname, port)?,
+            };
+            Ok(Self::Quic { addrs, hostname })
         } else if s.starts_with("sdns://") {
             anyhow::bail!(
                 "DNSCrypt (sdns://) is not supported. Use tls://, https://, or quic:// instead."
@@ -86,9 +94,9 @@ impl UpstreamSpec {
     pub fn label(&self) -> String {
         match self {
             Self::Udp(addr) => format!("udp://{}", addr),
-            Self::Tls { hostname, addr } => format!("tls://{}:{}", hostname, addr.port()),
+            Self::Tls { hostname, addrs } => format!("tls://{}:{}", hostname, addrs[0].port()),
             Self::Https { url, .. } => url.clone(),
-            Self::Quic { hostname, addr } => format!("quic://{}:{}", hostname, addr.port()),
+            Self::Quic { hostname, addrs } => format!("quic://{}:{}", hostname, addrs[0].port()),
         }
     }
 }
@@ -142,15 +150,15 @@ fn parse_url_host(url: &str) -> anyhow::Result<(String, u16)> {
     }
 }
 
-/// Blocking hostname resolution via the system resolver.
+/// Blocking hostname resolution via the system resolver, returning all addresses.
 /// Used at startup only, before oxi-hole is the system DNS.
-fn resolve_hostname_blocking(host: &str, port: u16) -> anyhow::Result<SocketAddr> {
+fn resolve_all_blocking(host: &str, port: u16) -> anyhow::Result<Vec<SocketAddr>> {
     use std::net::ToSocketAddrs;
-    let addr = format!("{}:{}", host, port)
-        .to_socket_addrs()?
-        .next()
-        .ok_or_else(|| anyhow::anyhow!("Could not resolve {}", host))?;
-    Ok(addr)
+    let addrs: Vec<SocketAddr> = format!("{}:{}", host, port).to_socket_addrs()?.collect();
+    if addrs.is_empty() {
+        anyhow::bail!("Could not resolve {}", host);
+    }
+    Ok(addrs)
 }
 
 /// Handles forwarding DNS queries to upstream servers with multi-protocol support.
@@ -217,30 +225,30 @@ impl UpstreamForwarder {
     pub async fn add_upstream(&self, s: &str) -> anyhow::Result<()> {
         let spec = if let Some(rest) = s.strip_prefix("tls://") {
             let (hostname, port, maybe_addr) = parse_host_port(rest, 853);
-            let addr = match maybe_addr {
-                Some(a) => a,
+            let addrs = match maybe_addr {
+                Some(a) => vec![a],
                 None => self.resolve_hostname_via_upstreams(&hostname, port).await?,
             };
-            UpstreamSpec::Tls { addr, hostname }
+            UpstreamSpec::Tls { addrs, hostname }
         } else if s.starts_with("https://") {
             let (hostname, port) = parse_url_host(s)?;
-            let resolved_addr = if let Ok(ip) = hostname.parse::<IpAddr>() {
-                SocketAddr::new(ip, port)
+            let resolved_addrs = if let Ok(ip) = hostname.parse::<IpAddr>() {
+                vec![SocketAddr::new(ip, port)]
             } else {
                 self.resolve_hostname_via_upstreams(&hostname, port).await?
             };
             UpstreamSpec::Https {
                 url: s.to_string(),
                 hostname,
-                resolved_addr,
+                resolved_addrs,
             }
         } else if let Some(rest) = s.strip_prefix("quic://") {
             let (hostname, port, maybe_addr) = parse_host_port(rest, 853);
-            let addr = match maybe_addr {
-                Some(a) => a,
+            let addrs = match maybe_addr {
+                Some(a) => vec![a],
                 None => self.resolve_hostname_via_upstreams(&hostname, port).await?,
             };
-            UpstreamSpec::Quic { addr, hostname }
+            UpstreamSpec::Quic { addrs, hostname }
         } else if s.starts_with("sdns://") {
             anyhow::bail!(
                 "DNSCrypt (sdns://) is not supported. Use tls://, https://, or quic:// instead."
@@ -256,12 +264,12 @@ impl UpstreamForwarder {
         Ok(())
     }
 
-    /// Resolve a hostname to a SocketAddr by querying the existing configured upstreams.
+    /// Resolve a hostname to all available IP addresses by querying existing upstreams.
     async fn resolve_hostname_via_upstreams(
         &self,
         hostname: &str,
         port: u16,
-    ) -> anyhow::Result<SocketAddr> {
+    ) -> anyhow::Result<Vec<SocketAddr>> {
         use hickory_proto::rr::{Name, RData, RecordType};
         use hickory_proto::serialize::binary::BinDecodable;
 
@@ -276,13 +284,20 @@ impl UpstreamForwarder {
         let (response_bytes, _) = self.forward(&packet).await?;
         let response = hickory_proto::op::Message::from_bytes(&response_bytes)?;
 
-        for answer in response.answers() {
-            if let RData::A(ip) = answer.data() {
-                return Ok(SocketAddr::new(IpAddr::V4(ip.0), port));
-            }
+        let addrs: Vec<SocketAddr> = response
+            .answers()
+            .iter()
+            .filter_map(|r| match r.data() {
+                RData::A(ip) => Some(SocketAddr::new(IpAddr::V4(ip.0), port)),
+                _ => None,
+            })
+            .collect();
+
+        if addrs.is_empty() {
+            anyhow::bail!("Could not resolve hostname '{}'", hostname);
         }
 
-        anyhow::bail!("Could not resolve hostname '{}'", hostname)
+        Ok(addrs)
     }
 
     pub fn remove_upstream(&self, s: &str) -> bool {
@@ -351,17 +366,19 @@ impl UpstreamForwarder {
     ) -> anyhow::Result<Vec<u8>> {
         match upstream {
             UpstreamSpec::Udp(addr) => self.forward_udp(packet, *addr).await,
-            UpstreamSpec::Tls { addr, hostname } => self.forward_dot(packet, *addr, hostname).await,
+            UpstreamSpec::Tls { addrs, hostname } => {
+                self.forward_dot(packet, addrs, hostname).await
+            }
             UpstreamSpec::Https {
                 url,
                 hostname,
-                resolved_addr,
+                resolved_addrs,
             } => {
-                self.forward_doh(packet, url, hostname, *resolved_addr)
+                self.forward_doh(packet, url, hostname, resolved_addrs)
                     .await
             }
-            UpstreamSpec::Quic { addr, hostname } => {
-                self.forward_doq(packet, *addr, hostname).await
+            UpstreamSpec::Quic { addrs, hostname } => {
+                self.forward_doq(packet, addrs, hostname).await
             }
         }
     }
@@ -725,8 +742,46 @@ impl UpstreamForwarder {
         Ok(buf[..len].to_vec())
     }
 
-    /// DNS-over-TLS forwarding.
+    /// DNS-over-TLS forwarding. Races all resolved addresses in parallel,
+    /// returns the fastest successful response.
     async fn forward_dot(
+        &self,
+        packet: &[u8],
+        addrs: &[SocketAddr],
+        hostname: &str,
+    ) -> anyhow::Result<Vec<u8>> {
+        if addrs.len() == 1 {
+            return self.forward_dot_single(packet, addrs[0], hostname).await;
+        }
+
+        let (tx, mut rx) = tokio::sync::mpsc::channel(addrs.len());
+        for addr in addrs {
+            let tx = tx.clone();
+            let forwarder = self.clone();
+            let packet = packet.to_vec();
+            let hostname = hostname.to_string();
+            let addr = *addr;
+            tokio::spawn(async move {
+                let result = forwarder.forward_dot_single(&packet, addr, &hostname).await;
+                let _ = tx.send((result, addr)).await;
+            });
+        }
+        drop(tx);
+
+        let mut last_err = None;
+        while let Some((result, addr)) = rx.recv().await {
+            match result {
+                Ok(response) => return Ok(response),
+                Err(e) => {
+                    warn!("DoT {} failed: {}", addr, e);
+                    last_err = Some(e);
+                }
+            }
+        }
+        Err(last_err.unwrap_or_else(|| anyhow::anyhow!("DoT: all addresses failed")))
+    }
+
+    async fn forward_dot_single(
         &self,
         packet: &[u8],
         addr: SocketAddr,
@@ -740,36 +795,85 @@ impl UpstreamForwarder {
         let mut tls =
             tokio::time::timeout(self.timeout, connector.connect(server_name, tcp)).await??;
 
-        // DNS over TCP/TLS: 2-byte big-endian length prefix
         let len_bytes = (packet.len() as u16).to_be_bytes();
         tls.write_all(&len_bytes).await?;
         tls.write_all(packet).await?;
         tls.flush().await?;
 
-        // Read response length
         let mut resp_len_buf = [0u8; 2];
         tokio::time::timeout(self.timeout, tls.read_exact(&mut resp_len_buf)).await??;
         let resp_len = u16::from_be_bytes(resp_len_buf) as usize;
 
-        // Read response
         let mut resp_buf = vec![0u8; resp_len];
         tokio::time::timeout(self.timeout, tls.read_exact(&mut resp_buf)).await??;
 
         Ok(resp_buf)
     }
 
-    /// DNS-over-HTTPS forwarding (RFC 8484).
-    /// Uses a pre-resolved IP address to avoid DNS resolution loops.
+    /// DNS-over-HTTPS forwarding (RFC 8484). Races all resolved addresses in parallel,
+    /// returns the fastest successful response.
     async fn forward_doh(
         &self,
         packet: &[u8],
         url: &str,
         hostname: &str,
-        resolved_addr: SocketAddr,
+        resolved_addrs: &[SocketAddr],
+    ) -> anyhow::Result<Vec<u8>> {
+        if resolved_addrs.len() == 1 {
+            return self
+                .forward_doh_single(packet, url, hostname, resolved_addrs[0])
+                .await;
+        }
+
+        let (tx, mut rx) = tokio::sync::mpsc::channel(resolved_addrs.len());
+        for addr in resolved_addrs {
+            let tx = tx.clone();
+            let timeout = self.timeout;
+            let packet = packet.to_vec();
+            let url = url.to_string();
+            let hostname = hostname.to_string();
+            let addr = *addr;
+            tokio::spawn(async move {
+                let result =
+                    Self::forward_doh_to_addr(&packet, &url, &hostname, addr, timeout).await;
+                let _ = tx.send((result, addr)).await;
+            });
+        }
+        drop(tx);
+
+        let mut last_err = None;
+        while let Some((result, addr)) = rx.recv().await {
+            match result {
+                Ok(response) => return Ok(response),
+                Err(e) => {
+                    warn!("DoH {} failed: {}", addr, e);
+                    last_err = Some(e);
+                }
+            }
+        }
+        Err(last_err.unwrap_or_else(|| anyhow::anyhow!("DoH: all addresses failed")))
+    }
+
+    async fn forward_doh_single(
+        &self,
+        packet: &[u8],
+        url: &str,
+        hostname: &str,
+        addr: SocketAddr,
+    ) -> anyhow::Result<Vec<u8>> {
+        Self::forward_doh_to_addr(packet, url, hostname, addr, self.timeout).await
+    }
+
+    async fn forward_doh_to_addr(
+        packet: &[u8],
+        url: &str,
+        hostname: &str,
+        addr: SocketAddr,
+        timeout: Duration,
     ) -> anyhow::Result<Vec<u8>> {
         let client = reqwest::Client::builder()
-            .timeout(self.timeout)
-            .resolve(hostname, resolved_addr)
+            .timeout(timeout)
+            .resolve(hostname, addr)
             .build()?;
 
         let response = client
@@ -788,8 +892,46 @@ impl UpstreamForwarder {
         Ok(body.to_vec())
     }
 
-    /// DNS-over-QUIC forwarding (RFC 9250).
+    /// DNS-over-QUIC forwarding (RFC 9250). Races all resolved addresses in parallel,
+    /// returns the fastest successful response.
     async fn forward_doq(
+        &self,
+        packet: &[u8],
+        addrs: &[SocketAddr],
+        hostname: &str,
+    ) -> anyhow::Result<Vec<u8>> {
+        if addrs.len() == 1 {
+            return self.forward_doq_single(packet, addrs[0], hostname).await;
+        }
+
+        let (tx, mut rx) = tokio::sync::mpsc::channel(addrs.len());
+        for addr in addrs {
+            let tx = tx.clone();
+            let forwarder = self.clone();
+            let packet = packet.to_vec();
+            let hostname = hostname.to_string();
+            let addr = *addr;
+            tokio::spawn(async move {
+                let result = forwarder.forward_doq_single(&packet, addr, &hostname).await;
+                let _ = tx.send((result, addr)).await;
+            });
+        }
+        drop(tx);
+
+        let mut last_err = None;
+        while let Some((result, addr)) = rx.recv().await {
+            match result {
+                Ok(response) => return Ok(response),
+                Err(e) => {
+                    warn!("DoQ {} failed: {}", addr, e);
+                    last_err = Some(e);
+                }
+            }
+        }
+        Err(last_err.unwrap_or_else(|| anyhow::anyhow!("DoQ: all addresses failed")))
+    }
+
+    async fn forward_doq_single(
         &self,
         packet: &[u8],
         addr: SocketAddr,
@@ -801,7 +943,6 @@ impl UpstreamForwarder {
         let connection =
             tokio::time::timeout(self.timeout, endpoint.connect(addr, hostname)?).await??;
 
-        // Open a bidirectional stream for this query
         let (mut send, mut recv) =
             tokio::time::timeout(self.timeout, connection.open_bi()).await??;
 
@@ -811,7 +952,6 @@ impl UpstreamForwarder {
         send.write_all(packet).await?;
         send.finish()?;
 
-        // Read response: 2-byte length + message
         let mut resp_len_buf = [0u8; 2];
         tokio::time::timeout(self.timeout, recv.read_exact(&mut resp_len_buf)).await??;
         let resp_len = u16::from_be_bytes(resp_len_buf) as usize;
@@ -819,7 +959,6 @@ impl UpstreamForwarder {
         let mut resp_buf = vec![0u8; resp_len];
         tokio::time::timeout(self.timeout, recv.read_exact(&mut resp_buf)).await??;
 
-        // Clean up
         connection.close(0u32.into(), b"done");
         endpoint.wait_idle().await;
 
