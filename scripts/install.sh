@@ -378,7 +378,19 @@ do_install() {
         rm -rf "$CONFIG_DIR"
         rm -rf "$LOG_DIR"
         if id oxi-hole >/dev/null 2>&1; then
-            userdel oxi-hole 2>/dev/null || true
+            case "$OS" in
+                darwin)
+                    dscl . -delete /Users/oxi-hole 2>/dev/null || true
+                    ;;
+                freebsd|openbsd)
+                    if command -v pw >/dev/null 2>&1; then
+                        pw userdel oxi-hole 2>/dev/null || true
+                    fi
+                    ;;
+                *)
+                    userdel oxi-hole 2>/dev/null || true
+                    ;;
+            esac
         fi
         log_info "Existing installation purged"
     fi
@@ -437,14 +449,41 @@ do_install() {
     printf "  ${CYAN}Logs:${NC}      ${LOG_DIR}/\n"
     printf "  ${CYAN}Service:${NC}   ${SERVICE_NAME}\n"
     printf "\n"
-    printf "  ${BOLD}Web Dashboard:${NC}  ${GREEN}http://$(hostname -I 2>/dev/null | awk '{print $1}' || echo 'localhost'):8080${NC}\n"
+    # Detect local IP address (platform-portable)
+    LOCAL_IP=""
+    if command -v hostname >/dev/null 2>&1 && hostname -I >/dev/null 2>&1; then
+        LOCAL_IP=$(hostname -I 2>/dev/null | awk '{print $1}')
+    elif command -v ifconfig >/dev/null 2>&1; then
+        LOCAL_IP=$(ifconfig 2>/dev/null | grep 'inet ' | grep -v '127.0.0.1' | head -1 | awk '{print $2}' | sed 's/addr://')
+    fi
+    LOCAL_IP="${LOCAL_IP:-localhost}"
+
+    printf "  ${BOLD}Web Dashboard:${NC}  ${GREEN}http://${LOCAL_IP}:8080${NC}\n"
     printf "  ${BOLD}DNS Server:${NC}     UDP port 53\n"
     printf "\n"
     printf "  ${CYAN}Manage the service:${NC}\n"
-    printf "    sudo systemctl status ${SERVICE_NAME}\n"
-    printf "    sudo systemctl stop ${SERVICE_NAME}\n"
-    printf "    sudo systemctl restart ${SERVICE_NAME}\n"
-    printf "    sudo journalctl -u ${SERVICE_NAME} -f\n"
+    case "$INIT_SYSTEM" in
+        systemd)
+            printf "    sudo systemctl status ${SERVICE_NAME}\n"
+            printf "    sudo systemctl stop ${SERVICE_NAME}\n"
+            printf "    sudo systemctl restart ${SERVICE_NAME}\n"
+            printf "    sudo journalctl -u ${SERVICE_NAME} -f\n"
+            ;;
+        launchd)
+            printf "    sudo launchctl list | grep ${SERVICE_NAME}\n"
+            printf "    sudo launchctl unload /Library/LaunchDaemons/com.oxi-hole.server.plist\n"
+            printf "    sudo launchctl load /Library/LaunchDaemons/com.oxi-hole.server.plist\n"
+            printf "    tail -f ${LOG_DIR}/oxi-hole.log\n"
+            ;;
+        openrc)
+            printf "    sudo rc-service ${SERVICE_NAME} status\n"
+            printf "    sudo rc-service ${SERVICE_NAME} stop\n"
+            printf "    sudo rc-service ${SERVICE_NAME} restart\n"
+            ;;
+        *)
+            printf "    ${INSTALL_DIR}/${BINARY_NAME} ${CONFIG_DIR}/config.toml\n"
+            ;;
+    esac
     printf "\n"
     printf "  ${CYAN}Edit config:${NC}  sudo nano ${CONFIG_DIR}/config.toml\n"
     printf "\n"
@@ -593,7 +632,19 @@ do_uninstall() {
 
     # Remove user
     if id oxi-hole >/dev/null 2>&1; then
-        userdel oxi-hole 2>/dev/null || true
+        case "$OS" in
+            darwin)
+                dscl . -delete /Users/oxi-hole 2>/dev/null || true
+                ;;
+            freebsd|openbsd)
+                if command -v pw >/dev/null 2>&1; then
+                    pw userdel oxi-hole 2>/dev/null || true
+                fi
+                ;;
+            *)
+                userdel oxi-hole 2>/dev/null || true
+                ;;
+        esac
         log_info "System user 'oxi-hole' removed"
     fi
 
@@ -611,11 +662,30 @@ do_uninstall() {
 create_user() {
     if ! id oxi-hole >/dev/null 2>&1; then
         log_info "Creating system user 'oxi-hole'..."
-        if command -v useradd >/dev/null 2>&1; then
-            useradd --system --no-create-home --shell /usr/sbin/nologin oxi-hole 2>/dev/null || true
-        elif command -v adduser >/dev/null 2>&1; then
-            adduser --system --no-create-home --disabled-login oxi-hole 2>/dev/null || true
-        fi
+        case "$OS" in
+            darwin)
+                # macOS: use dscl to create a system account
+                LAST_ID=$(dscl . -list /Users UniqueID 2>/dev/null | awk '{print $2}' | sort -n | tail -1)
+                NEXT_ID=$((LAST_ID + 1))
+                dscl . -create /Users/oxi-hole 2>/dev/null || true
+                dscl . -create /Users/oxi-hole UserShell /usr/bin/false 2>/dev/null || true
+                dscl . -create /Users/oxi-hole UniqueID "$NEXT_ID" 2>/dev/null || true
+                dscl . -create /Users/oxi-hole PrimaryGroupID 20 2>/dev/null || true
+                dscl . -create /Users/oxi-hole NFSHomeDirectory /var/empty 2>/dev/null || true
+                ;;
+            freebsd|openbsd)
+                if command -v pw >/dev/null 2>&1; then
+                    pw useradd oxi-hole -s /usr/sbin/nologin -d /nonexistent -c "Oxi-Hole DNS" 2>/dev/null || true
+                fi
+                ;;
+            *)
+                if command -v useradd >/dev/null 2>&1; then
+                    useradd --system --no-create-home --shell /usr/sbin/nologin oxi-hole 2>/dev/null || true
+                elif command -v adduser >/dev/null 2>&1; then
+                    adduser --system --no-create-home --disabled-login oxi-hole 2>/dev/null || true
+                fi
+                ;;
+        esac
     else
         log_verbose "User 'oxi-hole' already exists"
     fi
@@ -872,15 +942,41 @@ check_port53() {
                 exit 1
                 ;;
             *)
-                systemctl stop dnsmasq 2>/dev/null || true
-                systemctl disable dnsmasq 2>/dev/null || true
+                detect_init_system
+                case "$INIT_SYSTEM" in
+                    systemd)
+                        systemctl stop dnsmasq 2>/dev/null || true
+                        systemctl disable dnsmasq 2>/dev/null || true
+                        ;;
+                    launchd)
+                        launchctl unload /Library/LaunchDaemons/*dnsmasq* 2>/dev/null || true
+                        ;;
+                    openrc)
+                        rc-service dnsmasq stop 2>/dev/null || true
+                        rc-update del dnsmasq default 2>/dev/null || true
+                        ;;
+                    *)
+                        pkill dnsmasq 2>/dev/null || true
+                        ;;
+                esac
                 log_info "dnsmasq stopped and disabled"
                 ;;
         esac
     elif echo "$PORT53_INFO" | grep -q "named\|bind"; then
         log_error "BIND/named is using port 53."
-        log_error "Please stop it manually and re-run the installer:"
-        log_error "  sudo systemctl stop named && sudo systemctl disable named"
+        log_error "Please stop it manually and re-run the installer."
+        detect_init_system
+        case "$INIT_SYSTEM" in
+            systemd)
+                log_error "  sudo systemctl stop named && sudo systemctl disable named"
+                ;;
+            openrc)
+                log_error "  sudo rc-service named stop && sudo rc-update del named default"
+                ;;
+            *)
+                log_error "  sudo killall named"
+                ;;
+        esac
         exit 1
     else
         log_error "An unknown process is using port 53. Please free it and re-run the installer."
@@ -1006,7 +1102,12 @@ verify_running() {
     # Check if the process is running
     if ! pgrep -x "$BINARY_NAME" >/dev/null 2>&1; then
         log_error "Oxi-Hole process is not running."
-        log_error "Check logs with: journalctl -u ${SERVICE_NAME} --no-pager -n 20"
+        detect_init_system
+        case "$INIT_SYSTEM" in
+            systemd)  log_error "Check logs with: journalctl -u ${SERVICE_NAME} --no-pager -n 20" ;;
+            launchd)  log_error "Check logs with: tail -20 ${LOG_DIR}/oxi-hole.log" ;;
+            *)        log_error "Check logs in: ${LOG_DIR}/" ;;
+        esac
         exit 1
     fi
 
@@ -1014,7 +1115,12 @@ verify_running() {
     if command -v ss >/dev/null 2>&1; then
         if ! ss -tlnup 2>/dev/null | grep ':53 ' | grep -q "$BINARY_NAME"; then
             log_warn "Oxi-Hole is running but may not be listening on port 53."
-            log_warn "Check logs with: journalctl -u ${SERVICE_NAME} --no-pager -n 20"
+            detect_init_system
+            case "$INIT_SYSTEM" in
+                systemd)  log_warn "Check logs with: journalctl -u ${SERVICE_NAME} --no-pager -n 20" ;;
+                launchd)  log_warn "Check logs with: tail -20 ${LOG_DIR}/oxi-hole.log" ;;
+                *)        log_warn "Check logs in: ${LOG_DIR}/" ;;
+            esac
             return 0
         fi
     fi
