@@ -137,6 +137,7 @@ async fn main() -> anyhow::Result<()> {
         Some(dns_ready_tx),
         query_log.clone(),
         anonymize_ip.clone(),
+        false, // reuse_port: only true for --takeover mode
     );
 
     let dns_handle = tokio::spawn(async move {
