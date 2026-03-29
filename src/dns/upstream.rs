@@ -45,34 +45,40 @@ pub enum UpstreamSpec {
 }
 
 impl UpstreamSpec {
+    /// Parse an upstream spec. Uses the system resolver for hostnames.
+    /// Suitable for startup; for runtime additions use `UpstreamForwarder::add_upstream`.
     pub fn parse(s: &str) -> anyhow::Result<Self> {
         if let Some(rest) = s.strip_prefix("tls://") {
-            let (hostname, addr) = parse_host_port(rest, 853)?;
+            let (hostname, port, maybe_addr) = parse_host_port(rest, 853);
+            let addr = maybe_addr
+                .map(Ok)
+                .unwrap_or_else(|| resolve_hostname_blocking(&hostname, port))?;
             Ok(Self::Tls { addr, hostname })
         } else if s.starts_with("https://") {
-            // Pre-resolve the hostname to an IP to avoid infinite loops when
-            // oxi-hole is the system DNS resolver (reqwest would try to resolve
-            // the DoH hostname via oxi-hole, which forwards to the same DoH
-            // server, creating an infinite loop).
-            let (hostname, resolved_addr) = resolve_url_host(s)?;
+            let (hostname, port) = parse_url_host(s)?;
+            let resolved_addr = if let Ok(ip) = hostname.parse::<IpAddr>() {
+                SocketAddr::new(ip, port)
+            } else {
+                resolve_hostname_blocking(&hostname, port)?
+            };
             Ok(Self::Https {
                 url: s.to_string(),
                 hostname,
                 resolved_addr,
             })
         } else if let Some(rest) = s.strip_prefix("quic://") {
-            let (hostname, addr) = parse_host_port(rest, 853)?;
+            let (hostname, port, maybe_addr) = parse_host_port(rest, 853);
+            let addr = maybe_addr
+                .map(Ok)
+                .unwrap_or_else(|| resolve_hostname_blocking(&hostname, port))?;
             Ok(Self::Quic { addr, hostname })
         } else if s.starts_with("sdns://") {
             anyhow::bail!(
                 "DNSCrypt (sdns://) is not supported. Use tls://, https://, or quic:// instead."
             )
-        } else if let Some(rest) = s.strip_prefix("udp://") {
-            let addr = parse_udp_addr(rest)?;
-            Ok(Self::Udp(addr))
         } else {
-            // Default: plain UDP — accept "8.8.8.8" or "8.8.8.8:53"
-            let addr = parse_udp_addr(s)?;
+            let rest = s.strip_prefix("udp://").unwrap_or(s);
+            let addr = parse_udp_addr(rest)?;
             Ok(Self::Udp(addr))
         }
     }
@@ -87,41 +93,33 @@ impl UpstreamSpec {
     }
 }
 
-fn parse_host_port(s: &str, default_port: u16) -> anyhow::Result<(String, SocketAddr)> {
+/// Parse host:port or bare host with a default port. Returns (hostname, addr) if the
+/// host is an IP, or (hostname, None) if it needs DNS resolution.
+fn parse_host_port(s: &str, default_port: u16) -> (String, u16, Option<SocketAddr>) {
     // Try as SocketAddr first (e.g., "1.1.1.1:853")
     if let Ok(addr) = s.parse::<SocketAddr>() {
-        return Ok((addr.ip().to_string(), addr));
+        return (addr.ip().to_string(), addr.port(), Some(addr));
     }
-
+    // Try as bare IP
+    if let Ok(ip) = s.parse::<IpAddr>() {
+        let addr = SocketAddr::new(ip, default_port);
+        return (ip.to_string(), default_port, Some(addr));
+    }
     // Try as host:port (e.g., "dns.google:853")
     if let Some((host, port_str)) = s.rsplit_once(':') {
         if let Ok(port) = port_str.parse::<u16>() {
-            let addr = resolve_hostname(host, port)?;
-            return Ok((host.to_string(), addr));
+            return (host.to_string(), port, None);
         }
     }
-
     // Just a hostname, use default port
-    let addr = resolve_hostname(s, default_port)?;
-    Ok((s.to_string(), addr))
+    (s.to_string(), default_port, None)
 }
 
-fn resolve_hostname(host: &str, port: u16) -> anyhow::Result<SocketAddr> {
-    use std::net::ToSocketAddrs;
-    let addr = format!("{}:{}", host, port)
-        .to_socket_addrs()?
-        .next()
-        .ok_or_else(|| anyhow::anyhow!("Could not resolve {}", host))?;
-    Ok(addr)
-}
-
-/// Parse a plain UDP address: "8.8.8.8" or "8.8.8.8:53" or "1.1.1.1:5353"
+/// Parse a plain UDP address: "8.8.8.8" or "8.8.8.8:53"
 fn parse_udp_addr(s: &str) -> anyhow::Result<SocketAddr> {
-    // Try as IP:port first
     if let Ok(addr) = s.parse::<SocketAddr>() {
         return Ok(addr);
     }
-    // Try as bare IP with default port 53
     if let Ok(ip) = s.parse::<IpAddr>() {
         return Ok(SocketAddr::new(ip, 53));
     }
@@ -131,23 +129,28 @@ fn parse_udp_addr(s: &str) -> anyhow::Result<SocketAddr> {
     )
 }
 
-/// Extract the hostname from an HTTPS URL and resolve it to an IP address.
-/// This pre-resolution prevents infinite loops when oxi-hole is the system resolver.
-fn resolve_url_host(url: &str) -> anyhow::Result<(String, SocketAddr)> {
+/// Extract the hostname and port from an HTTPS URL.
+fn parse_url_host(url: &str) -> anyhow::Result<(String, u16)> {
     let without_scheme = url
         .strip_prefix("https://")
         .ok_or_else(|| anyhow::anyhow!("Not an HTTPS URL"))?;
     let host_part = without_scheme.split('/').next().unwrap_or(without_scheme);
-
-    // Split host and port
-    let (hostname, port) = if let Some((h, p)) = host_part.rsplit_once(':') {
-        (h, p.parse::<u16>().unwrap_or(443))
+    if let Some((h, p)) = host_part.rsplit_once(':') {
+        Ok((h.to_string(), p.parse::<u16>().unwrap_or(443)))
     } else {
-        (host_part, 443)
-    };
+        Ok((host_part.to_string(), 443))
+    }
+}
 
-    let addr = resolve_hostname(hostname, port)?;
-    Ok((hostname.to_string(), addr))
+/// Blocking hostname resolution via the system resolver.
+/// Used at startup only, before oxi-hole is the system DNS.
+fn resolve_hostname_blocking(host: &str, port: u16) -> anyhow::Result<SocketAddr> {
+    use std::net::ToSocketAddrs;
+    let addr = format!("{}:{}", host, port)
+        .to_socket_addrs()?
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("Could not resolve {}", host))?;
+    Ok(addr)
 }
 
 /// Handles forwarding DNS queries to upstream servers with multi-protocol support.
@@ -209,11 +212,77 @@ impl UpstreamForwarder {
             .collect()
     }
 
-    pub fn add_upstream(&self, s: &str) -> anyhow::Result<()> {
-        let spec = UpstreamSpec::parse(s)?;
+    /// Add an upstream server. Resolves hostnames using existing configured upstreams
+    /// (not the system resolver) to avoid deadlocks when oxi-hole is the system DNS.
+    pub async fn add_upstream(&self, s: &str) -> anyhow::Result<()> {
+        let spec = if let Some(rest) = s.strip_prefix("tls://") {
+            let (hostname, port, maybe_addr) = parse_host_port(rest, 853);
+            let addr = match maybe_addr {
+                Some(a) => a,
+                None => self.resolve_hostname_via_upstreams(&hostname, port).await?,
+            };
+            UpstreamSpec::Tls { addr, hostname }
+        } else if s.starts_with("https://") {
+            let (hostname, port) = parse_url_host(s)?;
+            let resolved_addr = if let Ok(ip) = hostname.parse::<IpAddr>() {
+                SocketAddr::new(ip, port)
+            } else {
+                self.resolve_hostname_via_upstreams(&hostname, port).await?
+            };
+            UpstreamSpec::Https {
+                url: s.to_string(),
+                hostname,
+                resolved_addr,
+            }
+        } else if let Some(rest) = s.strip_prefix("quic://") {
+            let (hostname, port, maybe_addr) = parse_host_port(rest, 853);
+            let addr = match maybe_addr {
+                Some(a) => a,
+                None => self.resolve_hostname_via_upstreams(&hostname, port).await?,
+            };
+            UpstreamSpec::Quic { addr, hostname }
+        } else if s.starts_with("sdns://") {
+            anyhow::bail!(
+                "DNSCrypt (sdns://) is not supported. Use tls://, https://, or quic:// instead."
+            )
+        } else {
+            let rest = s.strip_prefix("udp://").unwrap_or(s);
+            let addr = parse_udp_addr(rest)?;
+            UpstreamSpec::Udp(addr)
+        };
+
         tracing::info!("Adding upstream: {}", spec.label());
         self.upstreams.write().unwrap().push(spec);
         Ok(())
+    }
+
+    /// Resolve a hostname to a SocketAddr by querying the existing configured upstreams.
+    async fn resolve_hostname_via_upstreams(
+        &self,
+        hostname: &str,
+        port: u16,
+    ) -> anyhow::Result<SocketAddr> {
+        use hickory_proto::rr::{Name, RData, RecordType};
+        use hickory_proto::serialize::binary::BinDecodable;
+
+        let fqdn = if hostname.ends_with('.') {
+            hostname.to_string()
+        } else {
+            format!("{}.", hostname)
+        };
+        let name = Name::from_ascii(&fqdn)?;
+        let packet = build_query(random_query_id(), &name, RecordType::A, true)?;
+
+        let (response_bytes, _) = self.forward(&packet).await?;
+        let response = hickory_proto::op::Message::from_bytes(&response_bytes)?;
+
+        for answer in response.answers() {
+            if let RData::A(ip) = answer.data() {
+                return Ok(SocketAddr::new(IpAddr::V4(ip.0), port));
+            }
+        }
+
+        anyhow::bail!("Could not resolve hostname '{}'", hostname)
     }
 
     pub fn remove_upstream(&self, s: &str) -> bool {

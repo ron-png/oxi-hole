@@ -407,7 +407,7 @@ async fn api_add_upstream(
     State(state): State<AppState>,
     Json(req): Json<UpstreamRequest>,
 ) -> StatusCode {
-    match state.upstream.add_upstream(&req.upstream) {
+    match state.upstream.add_upstream(&req.upstream).await {
         Ok(_) => {
             info!("Added upstream: {}", req.upstream);
             state.save_config().await;
