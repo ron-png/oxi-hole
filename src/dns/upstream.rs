@@ -161,6 +161,24 @@ fn resolve_all_blocking(host: &str, port: u16) -> anyhow::Result<Vec<SocketAddr>
     Ok(addrs)
 }
 
+/// Send a single UDP DNS query and parse the response.
+/// Standalone — no UpstreamForwarder needed.
+async fn udp_query(
+    packet: &[u8],
+    server: SocketAddr,
+    timeout: Duration,
+) -> anyhow::Result<hickory_proto::op::Message> {
+    use hickory_proto::serialize::binary::BinDecodable;
+
+    let socket = tokio::net::UdpSocket::bind("0.0.0.0:0").await?;
+    socket.send_to(packet, server).await?;
+
+    let mut buf = vec![0u8; 4096];
+    let (len, _) = tokio::time::timeout(timeout, socket.recv_from(&mut buf)).await??;
+    let msg = hickory_proto::op::Message::from_bytes(&buf[..len])?;
+    Ok(msg)
+}
+
 /// Handles forwarding DNS queries to upstream servers with multi-protocol support.
 #[derive(Clone)]
 pub struct UpstreamForwarder {
