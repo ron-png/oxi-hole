@@ -358,20 +358,15 @@ async fn main() -> anyhow::Result<()> {
                     s.state = crate::update::UpdateState::HealthChecking;
                 }
 
-                let health_result = tokio::time::timeout(
-                    std::time::Duration::from_secs(30),
-                    tokio::process::Command::new(&tmp_path)
-                        .arg("--health-check")
-                        .arg(config_path_for_update.to_str().unwrap_or("config.toml"))
-                        .stdout(std::process::Stdio::piped())
-                        .stderr(std::process::Stdio::piped())
-                        .output(),
-                )
-                .await;
-
-                let health_output = match health_result {
-                    Ok(Ok(output)) => output,
-                    Ok(Err(e)) => {
+                let mut health_child = match tokio::process::Command::new(&tmp_path)
+                    .arg("--health-check")
+                    .arg(config_path_for_update.to_str().unwrap_or("config.toml"))
+                    .stdout(std::process::Stdio::piped())
+                    .stderr(std::process::Stdio::piped())
+                    .spawn()
+                {
+                    Ok(child) => child,
+                    Err(e) => {
                         tracing::warn!("Auto-update: health check failed to run: {}", e);
                         let mut s = update_status.write().await;
                         s.state = crate::update::UpdateState::Failed;
@@ -379,8 +374,27 @@ async fn main() -> anyhow::Result<()> {
                         s.logs = Some(e.to_string());
                         continue;
                     }
+                };
+
+                let health_output = match tokio::time::timeout(
+                    std::time::Duration::from_secs(30),
+                    health_child.wait_with_output(),
+                )
+                .await
+                {
+                    Ok(Ok(output)) => output,
+                    Ok(Err(e)) => {
+                        tracing::warn!("Auto-update: health check failed: {}", e);
+                        let _ = health_child.kill().await;
+                        let mut s = update_status.write().await;
+                        s.state = crate::update::UpdateState::Failed;
+                        s.message = Some(format!("Health check failed: {}", e));
+                        s.logs = Some(e.to_string());
+                        continue;
+                    }
                     Err(_) => {
-                        tracing::warn!("Auto-update: health check timed out (30s)");
+                        tracing::warn!("Auto-update: health check timed out (30s), killing child process");
+                        let _ = health_child.kill().await;
                         let mut s = update_status.write().await;
                         s.state = crate::update::UpdateState::Failed;
                         s.message =
@@ -442,6 +456,9 @@ async fn main() -> anyhow::Result<()> {
                     s.message = Some(format!("Failed to replace binary: {}", e));
                     continue;
                 }
+
+                // Clean up temp binary
+                let _ = std::fs::remove_file(&tmp_path);
 
                 // Start new binary with --takeover
                 info!("Auto-update: starting v{} with --takeover...", version);
