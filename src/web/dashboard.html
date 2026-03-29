@@ -903,6 +903,17 @@
     </div>
 
     <div class="container">
+            <!-- Auto-update status notification -->
+            <div id="updateNotification" style="display: none; padding: 12px 16px; border-radius: 8px; margin-bottom: 16px; position: relative;">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <span id="updateNotificationText"></span>
+                    <div>
+                        <button class="btn btn-sm" id="showLogsBtn" onclick="toggleUpdateLogs()" style="display: none;">Show Logs</button>
+                        <button class="btn btn-sm" id="dismissUpdateBtn" onclick="dismissUpdateStatus()" style="display: none;">Dismiss</button>
+                    </div>
+                </div>
+                <pre id="updateLogs" style="display: none; margin-top: 10px; padding: 10px; background: var(--card-bg); border-radius: 6px; max-height: 300px; overflow-y: auto; font-size: 12px; white-space: pre-wrap; word-break: break-all;"></pre>
+            </div>
         <!-- Stats (always visible) -->
         <div class="stats-grid">
             <div class="stat-card">
@@ -1590,6 +1601,74 @@
             toggle.classList.remove('loading');
         }
 
+        async function pollUpdateStatus() {
+            try {
+                const res = await fetch('/api/system/update/status');
+                const data = await res.json();
+                showUpdateNotification(data);
+            } catch (e) { /* ignore */ }
+        }
+
+        function showUpdateNotification(data) {
+            const el = document.getElementById('updateNotification');
+            const text = document.getElementById('updateNotificationText');
+            const logsBtn = document.getElementById('showLogsBtn');
+            const dismissBtn = document.getElementById('dismissUpdateBtn');
+            const logsEl = document.getElementById('updateLogs');
+
+            if (data.state === 'idle') {
+                el.style.display = 'none';
+                return;
+            }
+
+            el.style.display = 'block';
+
+            if (data.state === 'failed') {
+                el.style.background = 'rgba(255, 77, 77, 0.15)';
+                el.style.border = '1px solid var(--color-red)';
+                text.textContent = 'Auto-update failed: ' + (data.message || 'Unknown error');
+                text.style.color = 'var(--color-red)';
+                logsBtn.style.display = data.logs ? 'inline-block' : 'none';
+                dismissBtn.style.display = 'inline-block';
+                if (data.logs) {
+                    logsEl.textContent = data.logs;
+                }
+            } else {
+                el.style.background = 'rgba(77, 166, 255, 0.15)';
+                el.style.border = '1px solid var(--color-blue, #4da6ff)';
+                const labels = {
+                    checking: 'Checking for updates...',
+                    downloading: 'Downloading update...',
+                    health_checking: 'Verifying new version...',
+                    restarting: 'Restarting with new version...'
+                };
+                text.textContent = labels[data.state] || 'Auto-update in progress...';
+                text.style.color = 'var(--color-blue, #4da6ff)';
+                logsBtn.style.display = 'none';
+                dismissBtn.style.display = 'none';
+                logsEl.style.display = 'none';
+            }
+        }
+
+        function toggleUpdateLogs() {
+            const el = document.getElementById('updateLogs');
+            const btn = document.getElementById('showLogsBtn');
+            if (el.style.display === 'none') {
+                el.style.display = 'block';
+                btn.textContent = 'Hide Logs';
+            } else {
+                el.style.display = 'none';
+                btn.textContent = 'Show Logs';
+            }
+        }
+
+        async function dismissUpdateStatus() {
+            try {
+                await fetch('/api/system/update/status/dismiss', { method: 'POST' });
+                document.getElementById('updateNotification').style.display = 'none';
+            } catch (e) { console.error(e); }
+        }
+
         // ---- Blocking Mode ----
         async function refreshBlockingMode() {
             try {
@@ -1924,6 +2003,8 @@
         // ---- Auto-refresh ----
         setInterval(() => { refreshStats(); refreshQueries(); }, 2000);
         refreshStats();
+        pollUpdateStatus();
+        setInterval(pollUpdateStatus, 5000);
         refreshQueries();
         refreshFeatures();
         refreshCustomBlocked();
