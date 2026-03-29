@@ -6,7 +6,7 @@ use tracing::{info, warn};
 const VERSION: &str = env!("OXIHOLE_VERSION");
 const REPO_OWNER: &str = "ron-png";
 const REPO_NAME: &str = "oxi-hole";
-const CHECK_INTERVAL: std::time::Duration = std::time::Duration::from_secs(8 * 60 * 60); // 8 hours
+pub const CHECK_INTERVAL: std::time::Duration = std::time::Duration::from_secs(8 * 60 * 60); // 8 hours
 
 #[derive(Debug, Clone, Serialize)]
 pub struct VersionInfo {
@@ -15,6 +15,39 @@ pub struct VersionInfo {
     pub update_available: bool,
     pub release_url: Option<String>,
     pub download_url: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct UpdateStatus {
+    pub state: UpdateState,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub logs: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_attempt_secs: Option<u64>,
+    #[serde(skip)]
+    pub last_attempt: Option<std::time::Instant>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum UpdateState {
+    #[default]
+    Idle,
+    Checking,
+    Downloading,
+    HealthChecking,
+    Restarting,
+    Failed,
+}
+
+impl UpdateStatus {
+    pub fn to_serializable(&self) -> UpdateStatus {
+        let mut s = self.clone();
+        s.last_attempt_secs = s.last_attempt.map(|i| i.elapsed().as_secs());
+        s
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -157,13 +190,50 @@ impl UpdateChecker {
         );
         Ok(format!("Updated to v{}. Restart to apply.", latest))
     }
+
+    /// Download the new binary to a temp path without replacing the current binary.
+    /// Returns (temp_path, version_string) on success.
+    pub async fn download_update(&self) -> Result<(std::path::PathBuf, String), String> {
+        let info = self.check(true).await;
+        let download_url = info
+            .download_url
+            .ok_or("No download URL available for this platform")?;
+        let latest = info.latest_version.ok_or("Latest version unknown")?;
+
+        info!("Auto-update: downloading v{} from {}", latest, download_url);
+
+        let bytes = reqwest::get(&download_url)
+            .await
+            .map_err(|e| format!("Download failed: {}", e))?
+            .error_for_status()
+            .map_err(|e| format!("Download failed: {}", e))?
+            .bytes()
+            .await
+            .map_err(|e| format!("Failed to read download: {}", e))?;
+
+        let binary_bytes = extract_binary_from_tar_gz(&bytes)
+            .map_err(|e| format!("Failed to extract update archive: {}", e))?;
+
+        let tmp_path = std::path::PathBuf::from("/tmp/oxi-hole-update");
+        std::fs::write(&tmp_path, &binary_bytes)
+            .map_err(|e| format!("Failed to write to temp location: {}", e))?;
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&tmp_path, std::fs::Permissions::from_mode(0o755))
+                .map_err(|e| format!("Failed to set permissions: {}", e))?;
+        }
+
+        Ok((tmp_path, latest))
+    }
 }
 
 /// Try to backup and replace the binary in-place.
 /// On Linux, a running binary can't be written to (ETXTBSY), but it CAN be
 /// deleted — the running process keeps its file handle. We unlink first,
 /// then write the new binary to the same path.
-fn try_replace_binary(
+pub fn try_replace_binary(
     current_exe: &std::path::Path,
     binary_bytes: &[u8],
 ) -> Result<(), std::io::Error> {
