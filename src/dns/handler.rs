@@ -439,3 +439,212 @@ fn filter_aaaa_records(response_bytes: &[u8]) -> anyhow::Result<Vec<u8>> {
     }
     Ok(new_response.to_vec()?)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hickory_proto::op::Query;
+    use std::net::{Ipv4Addr, Ipv6Addr};
+
+    /// Build a minimal DNS request for testing.
+    fn make_request(domain: &str, query_type: RecordType) -> Message {
+        let mut msg = Message::new();
+        let mut header = Header::new();
+        header.set_id(0x1234);
+        header.set_message_type(MessageType::Query);
+        header.set_op_code(OpCode::Query);
+        header.set_recursion_desired(true);
+        msg.set_header(header);
+
+        let mut query = Query::new();
+        query.set_name(Name::from_ascii(domain).unwrap());
+        query.set_query_type(query_type);
+        msg.add_query(query);
+        msg
+    }
+
+    // ── Default mode ──────────────────────────────────────────────
+
+    #[test]
+    fn default_mode_a_query_returns_noerror_with_zero_ip() {
+        let req = make_request("blocked.example.", RecordType::A);
+        let resp = build_blocked_response(&req, "blocked.example.", RecordType::A, &BlockingMode::Default);
+
+        assert_eq!(resp.header().response_code(), ResponseCode::NoError);
+        assert_eq!(resp.answers().len(), 1);
+        match resp.answers()[0].data() {
+            RData::A(ip) => assert_eq!(std::net::Ipv4Addr::from(*ip), "0.0.0.0".parse::<Ipv4Addr>().unwrap()),
+            other => panic!("expected A record, got {:?}", other),
+        }
+        assert_eq!(resp.answers()[0].ttl(), 300);
+    }
+
+    #[test]
+    fn default_mode_aaaa_query_returns_noerror_with_zero_ipv6() {
+        let req = make_request("blocked.example.", RecordType::AAAA);
+        let resp = build_blocked_response(&req, "blocked.example.", RecordType::AAAA, &BlockingMode::Default);
+
+        assert_eq!(resp.header().response_code(), ResponseCode::NoError);
+        assert_eq!(resp.answers().len(), 1);
+        match resp.answers()[0].data() {
+            RData::AAAA(ip) => assert_eq!(std::net::Ipv6Addr::from(*ip), "::".parse::<Ipv6Addr>().unwrap()),
+            other => panic!("expected AAAA record, got {:?}", other),
+        }
+        assert_eq!(resp.answers()[0].ttl(), 300);
+    }
+
+    #[test]
+    fn default_mode_mx_query_returns_noerror_no_answers() {
+        let req = make_request("blocked.example.", RecordType::MX);
+        let resp = build_blocked_response(&req, "blocked.example.", RecordType::MX, &BlockingMode::Default);
+
+        assert_eq!(resp.header().response_code(), ResponseCode::NoError);
+        assert!(resp.answers().is_empty());
+    }
+
+    // ── Refused mode ──────────────────────────────────────────────
+
+    #[test]
+    fn refused_mode_a_query_returns_refused_no_answers() {
+        let req = make_request("blocked.example.", RecordType::A);
+        let resp = build_blocked_response(&req, "blocked.example.", RecordType::A, &BlockingMode::Refused);
+
+        assert_eq!(resp.header().response_code(), ResponseCode::Refused);
+        assert!(resp.answers().is_empty());
+    }
+
+    #[test]
+    fn refused_mode_aaaa_query_returns_refused_no_answers() {
+        let req = make_request("blocked.example.", RecordType::AAAA);
+        let resp = build_blocked_response(&req, "blocked.example.", RecordType::AAAA, &BlockingMode::Refused);
+
+        assert_eq!(resp.header().response_code(), ResponseCode::Refused);
+        assert!(resp.answers().is_empty());
+    }
+
+    // ── NxDomain mode ─────────────────────────────────────────────
+
+    #[test]
+    fn nxdomain_mode_a_query_returns_nxdomain_no_answers() {
+        let req = make_request("blocked.example.", RecordType::A);
+        let resp = build_blocked_response(&req, "blocked.example.", RecordType::A, &BlockingMode::NxDomain);
+
+        assert_eq!(resp.header().response_code(), ResponseCode::NXDomain);
+        assert!(resp.answers().is_empty());
+    }
+
+    #[test]
+    fn nxdomain_mode_aaaa_query_returns_nxdomain_no_answers() {
+        let req = make_request("blocked.example.", RecordType::AAAA);
+        let resp = build_blocked_response(&req, "blocked.example.", RecordType::AAAA, &BlockingMode::NxDomain);
+
+        assert_eq!(resp.header().response_code(), ResponseCode::NXDomain);
+        assert!(resp.answers().is_empty());
+    }
+
+    // ── NullIp mode ───────────────────────────────────────────────
+
+    #[test]
+    fn null_ip_mode_a_query_returns_noerror_with_zero_ip() {
+        let req = make_request("blocked.example.", RecordType::A);
+        let resp = build_blocked_response(&req, "blocked.example.", RecordType::A, &BlockingMode::NullIp);
+
+        assert_eq!(resp.header().response_code(), ResponseCode::NoError);
+        assert_eq!(resp.answers().len(), 1);
+        match resp.answers()[0].data() {
+            RData::A(ip) => assert_eq!(std::net::Ipv4Addr::from(*ip), "0.0.0.0".parse::<Ipv4Addr>().unwrap()),
+            other => panic!("expected A record, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn null_ip_mode_aaaa_query_returns_noerror_with_zero_ipv6() {
+        let req = make_request("blocked.example.", RecordType::AAAA);
+        let resp = build_blocked_response(&req, "blocked.example.", RecordType::AAAA, &BlockingMode::NullIp);
+
+        assert_eq!(resp.header().response_code(), ResponseCode::NoError);
+        assert_eq!(resp.answers().len(), 1);
+        match resp.answers()[0].data() {
+            RData::AAAA(ip) => assert_eq!(std::net::Ipv6Addr::from(*ip), "::".parse::<Ipv6Addr>().unwrap()),
+            other => panic!("expected AAAA record, got {:?}", other),
+        }
+    }
+
+    // ── CustomIp mode ─────────────────────────────────────────────
+
+    #[test]
+    fn custom_ip_mode_a_query_returns_noerror_with_custom_ipv4() {
+        let mode = BlockingMode::CustomIp {
+            ipv4: "192.168.1.1".parse().unwrap(),
+            ipv6: "fd00::1".parse().unwrap(),
+        };
+        let req = make_request("blocked.example.", RecordType::A);
+        let resp = build_blocked_response(&req, "blocked.example.", RecordType::A, &mode);
+
+        assert_eq!(resp.header().response_code(), ResponseCode::NoError);
+        assert_eq!(resp.answers().len(), 1);
+        match resp.answers()[0].data() {
+            RData::A(ip) => assert_eq!(std::net::Ipv4Addr::from(*ip), "192.168.1.1".parse::<Ipv4Addr>().unwrap()),
+            other => panic!("expected A record, got {:?}", other),
+        }
+        assert_eq!(resp.answers()[0].ttl(), 300);
+    }
+
+    #[test]
+    fn custom_ip_mode_aaaa_query_returns_noerror_with_custom_ipv6() {
+        let mode = BlockingMode::CustomIp {
+            ipv4: "192.168.1.1".parse().unwrap(),
+            ipv6: "fd00::1".parse().unwrap(),
+        };
+        let req = make_request("blocked.example.", RecordType::AAAA);
+        let resp = build_blocked_response(&req, "blocked.example.", RecordType::AAAA, &mode);
+
+        assert_eq!(resp.header().response_code(), ResponseCode::NoError);
+        assert_eq!(resp.answers().len(), 1);
+        match resp.answers()[0].data() {
+            RData::AAAA(ip) => assert_eq!(std::net::Ipv6Addr::from(*ip), "fd00::1".parse::<Ipv6Addr>().unwrap()),
+            other => panic!("expected AAAA record, got {:?}", other),
+        }
+        assert_eq!(resp.answers()[0].ttl(), 300);
+    }
+
+    #[test]
+    fn custom_ip_mode_mx_query_returns_noerror_no_answers() {
+        let mode = BlockingMode::CustomIp {
+            ipv4: "192.168.1.1".parse().unwrap(),
+            ipv6: "fd00::1".parse().unwrap(),
+        };
+        let req = make_request("blocked.example.", RecordType::MX);
+        let resp = build_blocked_response(&req, "blocked.example.", RecordType::MX, &mode);
+
+        assert_eq!(resp.header().response_code(), ResponseCode::NoError);
+        assert!(resp.answers().is_empty());
+    }
+
+    // ── Common header properties ──────────────────────────────────
+
+    #[test]
+    fn all_modes_echo_query_section() {
+        let modes: Vec<BlockingMode> = vec![
+            BlockingMode::Default,
+            BlockingMode::Refused,
+            BlockingMode::NxDomain,
+            BlockingMode::NullIp,
+            BlockingMode::CustomIp {
+                ipv4: "10.0.0.1".parse().unwrap(),
+                ipv6: "::1".parse().unwrap(),
+            },
+        ];
+
+        for mode in &modes {
+            let req = make_request("test.example.", RecordType::A);
+            let resp = build_blocked_response(&req, "test.example.", RecordType::A, mode);
+
+            assert_eq!(resp.header().id(), 0x1234, "mode={} should echo request ID", mode);
+            assert_eq!(resp.header().message_type(), MessageType::Response, "mode={}", mode);
+            assert!(resp.header().authoritative(), "mode={} should be authoritative", mode);
+            assert!(resp.header().recursion_available(), "mode={} should set RA", mode);
+            assert_eq!(resp.queries().len(), 1, "mode={} should echo query", mode);
+        }
+    }
+}
