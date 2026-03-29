@@ -16,13 +16,41 @@ const VERSION: &str = env!("OXIHOLE_VERSION");
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // Handle --version before anything else
-    if let Some(arg) = std::env::args().nth(1) {
-        if arg == "--version" || arg == "-V" {
-            println!("oxi-hole {}", VERSION);
-            return Ok(());
+    // Parse CLI arguments
+    let args: Vec<String> = std::env::args().collect();
+    let mut health_check = false;
+    let mut takeover = false;
+    let mut ready_file: Option<PathBuf> = None;
+    let mut config_arg: Option<String> = None;
+
+    let mut i = 1;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--version" | "-V" => {
+                println!("oxi-hole {}", VERSION);
+                return Ok(());
+            }
+            "--health-check" => health_check = true,
+            "--takeover" => takeover = true,
+            "--ready-file" => {
+                i += 1;
+                ready_file = Some(PathBuf::from(
+                    args.get(i)
+                        .ok_or_else(|| anyhow::anyhow!("--ready-file requires a path"))?,
+                ));
+            }
+            other => {
+                if config_arg.is_none() && !other.starts_with('-') {
+                    config_arg = Some(other.to_string());
+                }
+            }
         }
+        i += 1;
     }
+
+    let config_path = config_arg
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("config.toml"));
 
     rustls::crypto::ring::default_provider()
         .install_default()
@@ -33,11 +61,6 @@ async fn main() -> anyhow::Result<()> {
                 .unwrap_or_else(|_| "oxi_hole=info".into()),
         )
         .init();
-
-    let config_path = std::env::args()
-        .nth(1)
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("config.toml"));
 
     let config = Config::load(&config_path)?;
 
