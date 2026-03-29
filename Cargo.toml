@@ -24,6 +24,8 @@ tokio-rusqlite = "0.5"
 futures = "0.3"
 flate2 = "1"
 tar = "0.4"
+# SO_REUSEPORT for zero-downtime restarts
+socket2 = { version = "0.5", features = ["all"] }
 
 # TLS
 rustls = { version = "0.23", features = ["ring"] }
