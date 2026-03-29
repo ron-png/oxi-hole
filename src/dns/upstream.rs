@@ -812,6 +812,41 @@ impl UpstreamForwarder {
         let mut last_label = "root".to_string();
         let mut known_zone_depth: usize = 0;
 
+        // Check referral cache: find the deepest cached zone to start from
+        if self.cache_enabled.load(Ordering::Relaxed) {
+            for start in 0..labels.len() {
+                let zone = format!("{}.", labels[start..].join(".")).to_lowercase();
+                let key = (zone.clone(), hickory_proto::rr::RecordType::NS.into());
+                if let Some(entry) = self.cache.get(&key) {
+                    if !entry.is_expired() {
+                        if let Ok(cached_resp) =
+                            hickory_proto::op::Message::from_bytes(&entry.response_bytes)
+                        {
+                            let ns_names: Vec<String> = cached_resp
+                                .name_servers()
+                                .iter()
+                                .filter_map(|r| match r.data() {
+                                    RData::NS(ns) => Some(ns.0.to_ascii()),
+                                    _ => None,
+                                })
+                                .collect();
+                            let cached_servers =
+                                extract_glue_records(&cached_resp, &ns_names);
+                            if !cached_servers.is_empty() {
+                                debug!(
+                                    "Iterative: starting from cached referral for {}",
+                                    zone
+                                );
+                                current_servers = cached_servers;
+                                known_zone_depth = labels.len() - start;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         for _depth in 0..MAX_REFERRAL_DEPTH {
             // QNAME minimization: reveal one more label than the known zone
             let qmin_depth = (known_zone_depth + 1).min(labels.len());
@@ -888,6 +923,23 @@ impl UpstreamForwarder {
                     .cloned()
                     .unwrap_or_else(|| "unknown".to_string());
                 current_servers = next_servers;
+
+                // Cache the referral response so future queries for this zone skip earlier levels
+                if self.cache_enabled.load(Ordering::Relaxed) {
+                    if let Some(ns_record) = resp.name_servers().first() {
+                        let zone = ns_record.name().to_ascii().to_lowercase();
+                        let ttl = extract_min_ttl(&resp);
+                        self.cache.insert(
+                            (zone, hickory_proto::rr::RecordType::NS.into()),
+                            CacheEntry {
+                                response_bytes: resp_bytes.clone(),
+                                expires_at: Instant::now() + Duration::from_secs(ttl as u64),
+                                inserted_at: Instant::now(),
+                            },
+                        );
+                    }
+                }
+
                 continue;
             }
 
@@ -1033,6 +1085,19 @@ impl UpstreamForwarder {
                     })
                     .collect();
                 if !addrs.is_empty() {
+                    // Cache the NS address resolution
+                    if self.cache_enabled.load(Ordering::Relaxed) {
+                        let ttl = extract_min_ttl(&resp);
+                        let key = make_cache_key(&fqdn, hickory_proto::rr::RecordType::A.into());
+                        self.cache.insert(
+                            key,
+                            CacheEntry {
+                                response_bytes: _resp_bytes.clone(),
+                                expires_at: Instant::now() + Duration::from_secs(ttl as u64),
+                                inserted_at: Instant::now(),
+                            },
+                        );
+                    }
                     return Ok(addrs);
                 }
             }
