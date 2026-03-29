@@ -179,6 +179,107 @@ async fn udp_query(
     Ok(msg)
 }
 
+/// Resolve a hostname to IP addresses by walking the DNS hierarchy from root servers.
+/// Standalone function — no UpstreamForwarder needed. Used as fallback when the
+/// system resolver is unavailable (e.g. oxi-hole is the system DNS and is restarting).
+async fn resolve_via_root_servers(host: &str, port: u16) -> anyhow::Result<Vec<SocketAddr>> {
+    use hickory_proto::op::ResponseCode;
+    use hickory_proto::rr::{Name, RData, RecordType};
+
+    let fqdn = if host.ends_with('.') {
+        host.to_string()
+    } else {
+        format!("{}.", host)
+    };
+    let name = Name::from_ascii(&fqdn)?;
+    let timeout = Duration::from_secs(5);
+
+    let mut current_servers: Vec<SocketAddr> = ROOT_SERVERS
+        .iter()
+        .map(|ip| SocketAddr::new(IpAddr::V4(*ip), 53))
+        .collect();
+
+    for _depth in 0..MAX_REFERRAL_DEPTH {
+        let query_packet = build_query(random_query_id(), &name, RecordType::A, false)?;
+
+        // Try each server until one responds
+        let mut resp = None;
+        for server in &current_servers {
+            match udp_query(&query_packet, *server, timeout).await {
+                Ok(msg) => {
+                    resp = Some(msg);
+                    break;
+                }
+                Err(e) => {
+                    warn!("Root fallback: {} failed: {}", server, e);
+                }
+            }
+        }
+        let resp = resp.ok_or_else(|| {
+            anyhow::anyhow!("Root fallback: all servers failed resolving {}", host)
+        })?;
+
+        // Got A records — done
+        let addrs: Vec<SocketAddr> = resp
+            .answers()
+            .iter()
+            .filter_map(|r| match r.data() {
+                RData::A(ip) => Some(SocketAddr::new(IpAddr::V4(ip.0), port)),
+                _ => None,
+            })
+            .collect();
+        if !addrs.is_empty() {
+            return Ok(addrs);
+        }
+
+        // NXDOMAIN or non-NOERROR — give up
+        if resp.response_code() != ResponseCode::NoError {
+            anyhow::bail!(
+                "Root fallback: {} returned {:?}",
+                host,
+                resp.response_code()
+            );
+        }
+
+        // Follow referral: extract NS names, then glue A records
+        let ns_names: Vec<String> = resp
+            .name_servers()
+            .iter()
+            .filter_map(|r| match r.data() {
+                RData::NS(ns) => Some(ns.0.to_ascii()),
+                _ => None,
+            })
+            .collect();
+
+        if ns_names.is_empty() {
+            anyhow::bail!("Root fallback: no referral for {}", host);
+        }
+
+        let mut next_servers = Vec::new();
+        for record in resp.additionals() {
+            if record.record_type() == RecordType::A {
+                if let RData::A(ip) = record.data() {
+                    let rec_name = record.name().to_ascii();
+                    if ns_names.iter().any(|n| n == &rec_name) {
+                        next_servers.push(SocketAddr::new(IpAddr::V4(ip.0), 53));
+                    }
+                }
+            }
+        }
+
+        if next_servers.is_empty() {
+            anyhow::bail!(
+                "Root fallback: no glue records for {} referral",
+                host
+            );
+        }
+
+        current_servers = next_servers;
+    }
+
+    anyhow::bail!("Root fallback: max referral depth exceeded for {}", host)
+}
+
 /// Handles forwarding DNS queries to upstream servers with multi-protocol support.
 #[derive(Clone)]
 pub struct UpstreamForwarder {
