@@ -715,7 +715,7 @@
             accent-color: var(--color-accent);
         }
 
-        .blocking-mode-option input[type="radio"]:checked ~ .blocking-mode-label {
+        .blocking-mode-option input[type="radio"]:checked~.blocking-mode-label {
             color: var(--text-primary);
         }
 
@@ -897,13 +897,15 @@
 
             <div class="section">
                 <h2>Blocking Mode</h2>
-                <p style="color: var(--text-muted); margin-bottom: 12px;">How blocked domains are responded to by the DNS server.</p>
+                <p style="color: var(--text-muted); margin-bottom: 12px;">How blocked domains are responded to by the
+                    DNS server.</p>
                 <div class="blocking-mode-options">
                     <label class="blocking-mode-option">
                         <input type="radio" name="blockingMode" value="default" onchange="setBlockingMode('default')">
                         <div class="blocking-mode-label">
                             <strong>Default</strong>
-                            <span>Respond with 0.0.0.0 / :: for adblock-style rules; use the IP from hosts-style rules.</span>
+                            <span>Respond with 0.0.0.0 / :: for adblock-style rules; use the IP from hosts-style
+                                rules.</span>
                         </div>
                     </label>
                     <label class="blocking-mode-option">
@@ -928,7 +930,8 @@
                         </div>
                     </label>
                     <label class="blocking-mode-option">
-                        <input type="radio" name="blockingMode" value="custom_ip" onchange="setBlockingMode('custom_ip')">
+                        <input type="radio" name="blockingMode" value="custom_ip"
+                            onchange="setBlockingMode('custom_ip')">
                         <div class="blocking-mode-label">
                             <strong>Custom IP</strong>
                             <span>Respond with a manually specified IP address.</span>
@@ -945,7 +948,7 @@
             </div>
 
             <div class="section">
-                <h2>Block / Unblock Domain</h2>
+                <h2>Block Domain</h2>
                 <div class="add-domain">
                     <input type="text" id="domainInput" placeholder="e.g. ads.example.com" />
                     <button class="btn btn-accent" onclick="addBlocked()">Block</button>
