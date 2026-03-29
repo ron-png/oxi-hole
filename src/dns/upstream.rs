@@ -689,8 +689,7 @@ impl UpstreamForwarder {
                                 if let Ok(resp_msg) =
                                     hickory_proto::op::Message::from_bytes(&response)
                                 {
-                                    if let Ok(orig) =
-                                        hickory_proto::op::Message::from_bytes(packet)
+                                    if let Ok(orig) = hickory_proto::op::Message::from_bytes(packet)
                                     {
                                         if let Some(q) = orig.queries().first() {
                                             let key = make_cache_key(
@@ -1775,7 +1774,7 @@ mod cache_tests {
             CacheEntry {
                 response_bytes: response_bytes.clone(),
                 expires_at: Instant::now() + Duration::from_secs(ttl as u64),
-                },
+            },
         );
 
         // Lookup
