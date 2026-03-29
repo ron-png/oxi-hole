@@ -546,7 +546,9 @@ fn is_valid_domain(s: &str) -> bool {
     }
 
     // Reject all-numeric-label strings (IPv4 addresses like 0.0.0.0, 127.0.0.1)
-    let all_numeric = s.split('.').all(|label| label.chars().all(|c| c.is_ascii_digit()));
+    let all_numeric = s
+        .split('.')
+        .all(|label| label.chars().all(|c| c.is_ascii_digit()));
     if all_numeric {
         return false;
     }
@@ -579,7 +581,10 @@ mod tests {
     fn test_parse_hosts_format() {
         let content = "0.0.0.0 ads.example.com\n127.0.0.1 tracker.example.com\n";
         let result = parse_blocklist(content);
-        assert_eq!(result.blocked, vec!["ads.example.com", "tracker.example.com"]);
+        assert_eq!(
+            result.blocked,
+            vec!["ads.example.com", "tracker.example.com"]
+        );
     }
 
     #[test]
@@ -588,7 +593,11 @@ mod tests {
         let result = parse_blocklist(content);
         assert_eq!(
             result.blocked,
-            vec!["ads.example.com", "tracker.example.com", "banner.example.com"]
+            vec![
+                "ads.example.com",
+                "tracker.example.com",
+                "banner.example.com"
+            ]
         );
     }
 
@@ -612,7 +621,10 @@ mod tests {
     fn test_parse_domain_only() {
         let content = "ads.example.com\ntracker.example.com\n";
         let result = parse_blocklist(content);
-        assert_eq!(result.blocked, vec!["ads.example.com", "tracker.example.com"]);
+        assert_eq!(
+            result.blocked,
+            vec!["ads.example.com", "tracker.example.com"]
+        );
     }
 
     #[test]
@@ -628,7 +640,10 @@ mod tests {
     fn test_parse_adblock_style() {
         let content = "||ads.example.com^\n||tracker.example.com^\n";
         let result = parse_blocklist(content);
-        assert_eq!(result.blocked, vec!["ads.example.com", "tracker.example.com"]);
+        assert_eq!(
+            result.blocked,
+            vec!["ads.example.com", "tracker.example.com"]
+        );
     }
 
     #[test]
@@ -637,7 +652,11 @@ mod tests {
         let result = parse_blocklist(content);
         assert_eq!(
             result.blocked,
-            vec!["ads.example.com", "tracker.example.com", "banner.example.com"]
+            vec![
+                "ads.example.com",
+                "tracker.example.com",
+                "banner.example.com"
+            ]
         );
     }
 
@@ -667,7 +686,10 @@ mod tests {
     fn test_parse_adblock_exception() {
         let content = "||ads.example.com^\n@@||ads.example.com^\n||tracker.example.com^\n";
         let result = parse_blocklist(content);
-        assert_eq!(result.blocked, vec!["ads.example.com", "tracker.example.com"]);
+        assert_eq!(
+            result.blocked,
+            vec!["ads.example.com", "tracker.example.com"]
+        );
         assert!(result.exceptions.contains("ads.example.com"));
         assert!(!result.exceptions.contains("tracker.example.com"));
     }
@@ -678,7 +700,10 @@ mod tests {
     fn test_parse_wildcard() {
         let content = "*.ads.example.com\n*.tracker.example.com\n";
         let result = parse_blocklist(content);
-        assert_eq!(result.blocked, vec!["ads.example.com", "tracker.example.com"]);
+        assert_eq!(
+            result.blocked,
+            vec!["ads.example.com", "tracker.example.com"]
+        );
     }
 
     // ── Dnsmasq format ──
@@ -687,7 +712,10 @@ mod tests {
     fn test_parse_dnsmasq_local() {
         let content = "local=/ads.example.com/\nlocal=/tracker.example.com/\n";
         let result = parse_blocklist(content);
-        assert_eq!(result.blocked, vec!["ads.example.com", "tracker.example.com"]);
+        assert_eq!(
+            result.blocked,
+            vec!["ads.example.com", "tracker.example.com"]
+        );
     }
 
     #[test]
@@ -701,14 +729,18 @@ mod tests {
     fn test_parse_dnsmasq_address() {
         let content = "address=/ads.example.com/0.0.0.0\naddress=/tracker.example.com/\n";
         let result = parse_blocklist(content);
-        assert_eq!(result.blocked, vec!["ads.example.com", "tracker.example.com"]);
+        assert_eq!(
+            result.blocked,
+            vec!["ads.example.com", "tracker.example.com"]
+        );
     }
 
     // ── Comments ──
 
     #[test]
     fn test_parse_comments_and_empty_lines() {
-        let content = "# comment\n! another comment\n; rpz comment\n[Adblock Plus 2.0]\n\nads.example.com\n";
+        let content =
+            "# comment\n! another comment\n; rpz comment\n[Adblock Plus 2.0]\n\nads.example.com\n";
         let result = parse_blocklist(content);
         assert_eq!(result.blocked, vec!["ads.example.com"]);
     }
