@@ -370,6 +370,38 @@ fn extract_min_ttl(msg: &hickory_proto::op::Message) -> u32 {
     min_ttl.clamp(CACHE_TTL_FLOOR, CACHE_TTL_CEILING)
 }
 
+/// Rewrite all TTL values in a cached DNS response to reflect remaining cache time.
+fn rewrite_response_ttls(
+    response_bytes: &[u8],
+    remaining: Duration,
+) -> anyhow::Result<Vec<u8>> {
+    use hickory_proto::op::Message;
+    use hickory_proto::serialize::binary::BinDecodable;
+
+    let msg = Message::from_bytes(response_bytes)?;
+    let ttl = remaining.as_secs().max(1) as u32;
+
+    let mut new_msg = Message::new();
+    new_msg.set_header(*msg.header());
+    for q in msg.queries() {
+        new_msg.add_query(q.clone());
+    }
+    for mut r in msg.answers().to_vec() {
+        r.set_ttl(ttl);
+        new_msg.add_answer(r);
+    }
+    for mut r in msg.name_servers().to_vec() {
+        r.set_ttl(ttl);
+        new_msg.add_name_server(r);
+    }
+    for mut r in msg.additionals().to_vec() {
+        r.set_ttl(ttl);
+        new_msg.add_additional(r);
+    }
+
+    Ok(new_msg.to_vec()?)
+}
+
 /// Handles forwarding DNS queries to upstream servers with multi-protocol support.
 #[derive(Clone)]
 pub struct UpstreamForwarder {
@@ -1362,5 +1394,56 @@ mod cache_tests {
         msg.set_header(header);
 
         assert_eq!(extract_min_ttl(&msg), 30);
+    }
+
+    #[test]
+    fn rewrite_ttls_reduces_values() {
+        use hickory_proto::op::{Header, Message, MessageType, ResponseCode};
+        use hickory_proto::rr::{Name, RData, Record};
+        use hickory_proto::serialize::binary::BinDecodable;
+
+        let mut msg = Message::new();
+        let mut header = Header::new();
+        header.set_id(0xABCD);
+        header.set_message_type(MessageType::Response);
+        header.set_response_code(ResponseCode::NoError);
+        msg.set_header(header);
+
+        let name = Name::from_ascii("example.com.").unwrap();
+        let record = Record::from_rdata(name, 300, RData::A("1.2.3.4".parse().unwrap()));
+        msg.add_answer(record);
+
+        let bytes = msg.to_vec().unwrap();
+        let remaining = Duration::from_secs(120);
+        let rewritten = rewrite_response_ttls(&bytes, remaining).unwrap();
+
+        let parsed = Message::from_bytes(&rewritten).unwrap();
+        assert_eq!(parsed.answers()[0].ttl(), 120);
+        assert_eq!(parsed.header().id(), 0xABCD);
+    }
+
+    #[test]
+    fn rewrite_ttls_floors_at_one() {
+        use hickory_proto::op::{Header, Message, MessageType, ResponseCode};
+        use hickory_proto::rr::{Name, RData, Record};
+        use hickory_proto::serialize::binary::BinDecodable;
+
+        let mut msg = Message::new();
+        let mut header = Header::new();
+        header.set_id(1);
+        header.set_message_type(MessageType::Response);
+        header.set_response_code(ResponseCode::NoError);
+        msg.set_header(header);
+
+        let name = Name::from_ascii("example.com.").unwrap();
+        let record = Record::from_rdata(name, 300, RData::A("1.2.3.4".parse().unwrap()));
+        msg.add_answer(record);
+
+        let bytes = msg.to_vec().unwrap();
+        let remaining = Duration::from_secs(0);
+        let rewritten = rewrite_response_ttls(&bytes, remaining).unwrap();
+
+        let parsed = Message::from_bytes(&rewritten).unwrap();
+        assert_eq!(parsed.answers()[0].ttl(), 1);
     }
 }
