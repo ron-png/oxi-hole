@@ -64,17 +64,17 @@ async fn main() -> anyhow::Result<()> {
     let config = Config::load(&config_path)?;
 
     info!("Starting Oxi-Hole DNS server v{}", VERSION);
-    info!("DNS (UDP) listen: {}", config.dns.listen);
+    info!("DNS (UDP) listen: {:?}", config.dns.listen);
     if let Some(ref dot) = config.dns.dot_listen {
-        info!("DNS-over-TLS listen: {}", dot);
+        info!("DNS-over-TLS listen: {:?}", dot);
     }
     if let Some(ref doh) = config.dns.doh_listen {
-        info!("DNS-over-HTTPS listen: https://{}/dns-query", doh);
+        info!("DNS-over-HTTPS listen: {:?}", doh);
     }
     if let Some(ref doq) = config.dns.doq_listen {
-        info!("DNS-over-QUIC listen: {}", doq);
+        info!("DNS-over-QUIC listen: {:?}", doq);
     }
-    info!("Web admin: http://{}", config.web.listen);
+    info!("Web admin: {:?}", config.web.listen);
     info!("Upstreams: {:?}", config.dns.upstreams);
     info!(
         "Blocking: {} ({} blocklists, {} custom entries)",
@@ -341,6 +341,7 @@ async fn main() -> anyhow::Result<()> {
             tracing::error!("Web server error: {}", e);
         }
     });
+
 
     let (dns_result, web_result) = tokio::join!(dns_handle, web_handle);
     if let Err(e) = dns_result {

@@ -72,7 +72,7 @@ impl AppState {
     }
 }
 
-pub async fn run_web_server(listen: &str, state: AppState) -> anyhow::Result<()> {
+pub async fn run_web_server(listen: &[String], state: AppState) -> anyhow::Result<()> {
     let app = Router::new()
         // Dashboard
         .route("/", get(dashboard))
@@ -135,20 +135,31 @@ pub async fn run_web_server(listen: &str, state: AppState) -> anyhow::Result<()>
         .route("/api/logs/settings", post(api_set_log_settings))
         .with_state(state);
 
-    let sock_addr: std::net::SocketAddr = listen.parse()?;
-    let domain = if sock_addr.is_ipv4() {
-        socket2::Domain::IPV4
-    } else {
-        socket2::Domain::IPV6
-    };
-    let socket = socket2::Socket::new(domain, socket2::Type::STREAM, Some(socket2::Protocol::TCP))?;
-    socket.set_reuse_port(true)?;
-    socket.set_nonblocking(true)?;
-    socket.bind(&sock_addr.into())?;
-    socket.listen(128)?;
-    let listener = tokio::net::TcpListener::from_std(socket.into())?;
-    info!("Web admin UI listening on http://{}", listen);
-    axum::serve(listener, app).await?;
+    let mut handles = Vec::new();
+    for addr in listen {
+        let app = app.clone();
+        let sock_addr: std::net::SocketAddr = addr.parse()?;
+        let domain = if sock_addr.is_ipv4() {
+            socket2::Domain::IPV4
+        } else {
+            socket2::Domain::IPV6
+        };
+        let socket = socket2::Socket::new(domain, socket2::Type::STREAM, Some(socket2::Protocol::TCP))?;
+        socket.set_reuse_port(true)?;
+        socket.set_nonblocking(true)?;
+        socket.bind(&sock_addr.into())?;
+        socket.listen(1024)?;
+        let listener = tokio::net::TcpListener::from_std(socket.into())?;
+        let addr = addr.clone();
+        info!("Web admin listening on {}", addr);
+        handles.push(tokio::spawn(async move {
+            if let Err(e) = axum::serve(listener, app).await {
+                tracing::error!("Web server error on {}: {}", addr, e);
+            }
+        }));
+    }
+
+    futures::future::join_all(handles).await;
     Ok(())
 }
 

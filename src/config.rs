@@ -49,18 +49,18 @@ pub struct Config {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DnsConfig {
-    /// Address to listen on for plain DNS (UDP+TCP)
-    #[serde(default = "default_dns_listen")]
-    pub listen: String,
-    /// Address to listen on for DNS-over-TLS (port 853 typically)
-    #[serde(default)]
-    pub dot_listen: Option<String>,
-    /// Address to listen on for DNS-over-HTTPS
-    #[serde(default)]
-    pub doh_listen: Option<String>,
-    /// Address to listen on for DNS-over-QUIC
-    #[serde(default)]
-    pub doq_listen: Option<String>,
+    /// Addresses to listen on for plain DNS (UDP+TCP)
+    #[serde(default = "default_dns_listen", deserialize_with = "string_or_vec")]
+    pub listen: Vec<String>,
+    /// Addresses to listen on for DNS-over-TLS (port 853 typically)
+    #[serde(default, deserialize_with = "string_or_vec_opt")]
+    pub dot_listen: Option<Vec<String>>,
+    /// Addresses to listen on for DNS-over-HTTPS
+    #[serde(default, deserialize_with = "string_or_vec_opt")]
+    pub doh_listen: Option<Vec<String>>,
+    /// Addresses to listen on for DNS-over-QUIC
+    #[serde(default, deserialize_with = "string_or_vec_opt")]
+    pub doq_listen: Option<Vec<String>>,
     /// Upstream DNS servers (supports udp://, tls://, https://, quic:// prefixes)
     #[serde(default = "default_upstreams")]
     pub upstreams: Vec<String>,
@@ -71,9 +71,9 @@ pub struct DnsConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WebConfig {
-    /// Address to listen on for the web admin UI
-    #[serde(default = "default_web_listen")]
-    pub listen: String,
+    /// Addresses to listen on for the web admin UI
+    #[serde(default = "default_web_listen", deserialize_with = "string_or_vec")]
+    pub listen: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -141,6 +141,77 @@ impl Default for LogConfig {
     }
 }
 
+/// Deserialize a field that can be either a single string or a list of strings.
+fn string_or_vec<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de;
+
+    struct StringOrVec;
+
+    impl<'de> de::Visitor<'de> for StringOrVec {
+        type Value = Vec<String>;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+            formatter.write_str("a string or list of strings")
+        }
+
+        fn visit_str<E: de::Error>(self, value: &str) -> Result<Vec<String>, E> {
+            Ok(vec![value.to_string()])
+        }
+
+        fn visit_seq<A: de::SeqAccess<'de>>(self, mut seq: A) -> Result<Vec<String>, A::Error> {
+            let mut vec = Vec::new();
+            while let Some(value) = seq.next_element()? {
+                vec.push(value);
+            }
+            Ok(vec)
+        }
+    }
+
+    deserializer.deserialize_any(StringOrVec)
+}
+
+fn string_or_vec_opt<'de, D>(deserializer: D) -> Result<Option<Vec<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de;
+
+    struct StringOrVecOpt;
+
+    impl<'de> de::Visitor<'de> for StringOrVecOpt {
+        type Value = Option<Vec<String>>;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+            formatter.write_str("null, a string, or list of strings")
+        }
+
+        fn visit_none<E: de::Error>(self) -> Result<Option<Vec<String>>, E> {
+            Ok(None)
+        }
+
+        fn visit_unit<E: de::Error>(self) -> Result<Option<Vec<String>>, E> {
+            Ok(None)
+        }
+
+        fn visit_str<E: de::Error>(self, value: &str) -> Result<Option<Vec<String>>, E> {
+            Ok(Some(vec![value.to_string()]))
+        }
+
+        fn visit_seq<A: de::SeqAccess<'de>>(self, mut seq: A) -> Result<Option<Vec<String>>, A::Error> {
+            let mut vec = Vec::new();
+            while let Some(value) = seq.next_element()? {
+                vec.push(value);
+            }
+            Ok(Some(vec))
+        }
+    }
+
+    deserializer.deserialize_any(StringOrVecOpt)
+}
+
 fn default_dns() -> DnsConfig {
     DnsConfig {
         listen: default_dns_listen(),
@@ -158,12 +229,12 @@ fn default_web() -> WebConfig {
     }
 }
 
-fn default_dns_listen() -> String {
-    "0.0.0.0:53".to_string()
+fn default_dns_listen() -> Vec<String> {
+    vec!["0.0.0.0:53".to_string(), "[::]:53".to_string()]
 }
 
-fn default_web_listen() -> String {
-    "0.0.0.0:8080".to_string()
+fn default_web_listen() -> Vec<String> {
+    vec!["0.0.0.0:8080".to_string(), "[::]:8080".to_string()]
 }
 
 fn default_upstreams() -> Vec<String> {

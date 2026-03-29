@@ -65,15 +65,17 @@ impl DnsServer {
     pub async fn run(mut self) -> anyhow::Result<()> {
         let mut handles = Vec::new();
 
-        // Always start plain UDP listener
-        {
-            let addr = self.config.listen.clone();
+        // Plain UDP listeners
+        let mut first_udp = true;
+        for listen_addr in &self.config.listen {
+            let addr = listen_addr.clone();
             let bl = self.blocklist.clone();
             let st = self.stats.clone();
             let up = self.upstream.clone();
             let ft = self.features.clone();
             let bm = self.blocking_mode.clone();
-            let ready_tx = self.ready_tx.take();
+            // Only the first UDP listener gets the ready_tx
+            let ready_tx = if first_udp { self.ready_tx.take() } else { None };
             let ql = self.query_log.clone();
             let anon = self.anonymize_ip.clone();
             info!("Starting plain DNS (UDP) on {}", addr);
@@ -84,65 +86,73 @@ impl DnsServer {
                     tracing::error!("UDP DNS listener error: {}", e);
                 }
             }));
+            first_udp = false;
         }
 
-        // DNS-over-TLS listener
-        if let (Some(dot_addr), Some(tls_config)) = (&self.config.dot_listen, &self.tls_config) {
-            let addr = dot_addr.clone();
-            let bl = self.blocklist.clone();
-            let st = self.stats.clone();
-            let up = self.upstream.clone();
-            let ft = self.features.clone();
-            let bm = self.blocking_mode.clone();
-            let tls = tls_config.clone();
-            let ql = self.query_log.clone();
-            let anon = self.anonymize_ip.clone();
-            info!("Starting DNS-over-TLS on {}", addr);
-            handles.push(tokio::spawn(async move {
-                if let Err(e) = listener_dot::run(addr, bl, st, up, ft, bm, tls, ql, anon).await {
-                    tracing::error!("DoT listener error: {}", e);
-                }
-            }));
-        }
-
-        // DNS-over-HTTPS listener
-        if let (Some(doh_addr), Some(tls_config)) = (&self.config.doh_listen, &self.tls_config) {
-            let addr = doh_addr.clone();
-            let bl = self.blocklist.clone();
-            let st = self.stats.clone();
-            let up = self.upstream.clone();
-            let ft = self.features.clone();
-            let bm = self.blocking_mode.clone();
-            let tls = tls_config.clone();
-            let ql = self.query_log.clone();
-            let anon = self.anonymize_ip.clone();
-            info!("Starting DNS-over-HTTPS on {}", addr);
-            handles.push(tokio::spawn(async move {
-                if let Err(e) = listener_doh::run(addr, bl, st, up, ft, bm, tls, ql, anon).await {
-                    tracing::error!("DoH listener error: {}", e);
-                }
-            }));
-        }
-
-        // DNS-over-QUIC listener
-        if let Some(doq_addr) = &self.config.doq_listen {
-            if let Some(quic_config) = self.quic_config {
-                let addr = doq_addr.clone();
+        // DNS-over-TLS listeners
+        if let (Some(dot_addrs), Some(tls_config)) = (&self.config.dot_listen, &self.tls_config) {
+            for dot_addr in dot_addrs {
+                let addr = dot_addr.clone();
                 let bl = self.blocklist.clone();
                 let st = self.stats.clone();
                 let up = self.upstream.clone();
                 let ft = self.features.clone();
                 let bm = self.blocking_mode.clone();
+                let tls = tls_config.clone();
                 let ql = self.query_log.clone();
                 let anon = self.anonymize_ip.clone();
-                info!("Starting DNS-over-QUIC on {}", addr);
+                info!("Starting DNS-over-TLS on {}", addr);
                 handles.push(tokio::spawn(async move {
-                    if let Err(e) =
-                        listener_doq::run(addr, bl, st, up, ft, bm, quic_config, ql, anon).await
-                    {
-                        tracing::error!("DoQ listener error: {}", e);
+                    if let Err(e) = listener_dot::run(addr, bl, st, up, ft, bm, tls, ql, anon).await {
+                        tracing::error!("DoT listener error: {}", e);
                     }
                 }));
+            }
+        }
+
+        // DNS-over-HTTPS listeners
+        if let (Some(doh_addrs), Some(tls_config)) = (&self.config.doh_listen, &self.tls_config) {
+            for doh_addr in doh_addrs {
+                let addr = doh_addr.clone();
+                let bl = self.blocklist.clone();
+                let st = self.stats.clone();
+                let up = self.upstream.clone();
+                let ft = self.features.clone();
+                let bm = self.blocking_mode.clone();
+                let tls = tls_config.clone();
+                let ql = self.query_log.clone();
+                let anon = self.anonymize_ip.clone();
+                info!("Starting DNS-over-HTTPS on {}", addr);
+                handles.push(tokio::spawn(async move {
+                    if let Err(e) = listener_doh::run(addr, bl, st, up, ft, bm, tls, ql, anon).await {
+                        tracing::error!("DoH listener error: {}", e);
+                    }
+                }));
+            }
+        }
+
+        // DNS-over-QUIC listeners
+        if let Some(doq_addrs) = &self.config.doq_listen {
+            if let Some(quic_config) = &self.quic_config {
+                for doq_addr in doq_addrs {
+                    let addr = doq_addr.clone();
+                    let bl = self.blocklist.clone();
+                    let st = self.stats.clone();
+                    let up = self.upstream.clone();
+                    let ft = self.features.clone();
+                    let bm = self.blocking_mode.clone();
+                    let qc = quic_config.clone();
+                    let ql = self.query_log.clone();
+                    let anon = self.anonymize_ip.clone();
+                    info!("Starting DNS-over-QUIC on {}", addr);
+                    handles.push(tokio::spawn(async move {
+                        if let Err(e) =
+                            listener_doq::run(addr, bl, st, up, ft, bm, qc, ql, anon).await
+                        {
+                            tracing::error!("DoQ listener error: {}", e);
+                        }
+                    }));
+                }
             } else {
                 tracing::warn!("DoQ listen address configured but no TLS config available");
             }
