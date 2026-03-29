@@ -2,6 +2,9 @@ name: Release
 
 on:
   push:
+    branches: [main]
+    paths:
+      - 'version.txt'
     tags:
       - 'v*'
   workflow_dispatch:
@@ -16,10 +19,11 @@ env:
 
 jobs:
   prepare:
-    name: Set version from tag
+    name: Prepare release version
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
       commit_sha: ${{ steps.push.outputs.commit_sha }}
     steps:
       - name: Checkout
@@ -28,20 +32,26 @@ jobs:
           ref: ${{ github.event.repository.default_branch }}
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract version from tag
+      - name: Determine version
         id: version
         env:
-          TAG: ${{ github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
         run: |
-          # Strip 'v' prefix and everything after first '-' (e.g. v0.0.5b---docker -> 0.0.5b)
-          VERSION=$(echo "$TAG" | sed 's/^v//' | sed 's/---.*//')
+          if [ "$REF_TYPE" = "tag" ]; then
+            # Triggered by tag push — extract version from tag name
+            VERSION=$(echo "$REF_NAME" | sed 's/^v//' | sed 's/---.*//')
+          else
+            # Triggered by version.txt change — read version from file
+            VERSION=$(cat version.txt | tr -d '[:space:]')
+          fi
           # Cargo.toml needs strict semver (MAJOR.MINOR.PATCH)
-          # Extract numeric parts, pad to exactly 3 segments (e.g. "1" -> "1.0.0", "1.0" -> "1.0.0")
           NUMS=$(echo "$VERSION" | grep -oE '^[0-9]+(\.[0-9]+)*')
           IFS='.' read -r MAJOR MINOR PATCH _REST <<< "$NUMS"
           CARGO_VERSION="${MAJOR:-0}.${MINOR:-0}.${PATCH:-0}"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "cargo_version=$CARGO_VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
           echo "Version: $VERSION (Cargo: $CARGO_VERSION)"
 
       - name: Update Cargo.toml version
@@ -55,17 +65,17 @@ jobs:
       - name: Update Cargo.lock
         run: cargo generate-lockfile
 
-      - name: Commit version bump and update tag
+      - name: Commit version bump and create tag
         id: push
         env:
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ steps.version.outputs.tag }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add Cargo.toml Cargo.lock
           git commit -m "release: set version to $TAG" || echo "No changes to commit"
           git push
-          git tag -f "$TAG"
+          git tag -fa "$TAG" -m "Release $TAG"
           git push origin "$TAG" --force
           echo "commit_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
@@ -168,9 +178,8 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.ref_type == 'tag' && github.ref_name || 'development' }}
-          name: ${{ github.ref_type == 'tag' && github.ref_name || 'Development Build' }}
-          prerelease: ${{ github.ref_type != 'tag' }}
+          tag_name: ${{ needs.prepare.outputs.tag }}
+          name: ${{ needs.prepare.outputs.tag }}
           generate_release_notes: true
           files: |
             artifacts/*.tar.gz
@@ -228,9 +237,8 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest,enable=${{ github.ref_type == 'tag' }}
+            type=raw,value=${{ needs.prepare.outputs.version }}
+            type=raw,value=latest
 
       - name: Build and push multi-arch image
         uses: docker/build-push-action@v6
