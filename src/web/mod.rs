@@ -123,6 +123,9 @@ pub async fn run_web_server(listen: &[String], state: AppState) -> anyhow::Resul
         // Blocking mode
         .route("/api/blocking/mode", get(api_get_blocking_mode))
         .route("/api/blocking/mode", post(api_set_blocking_mode))
+        // Cache stats and flush
+        .route("/api/cache/stats", get(api_cache_stats))
+        .route("/api/cache/flush", post(api_cache_flush))
         // Version / update
         .route("/api/system/version", get(api_version))
         .route("/api/system/version/check", post(api_version_check))
@@ -293,6 +296,38 @@ async fn api_set_blocking_mode(
     info!("Blocking mode set to {}", new_mode);
     *state.blocking_mode.write().await = new_mode;
     state.save_config().await;
+    StatusCode::OK
+}
+
+// ==================== Cache Stats & Flush ====================
+
+#[derive(Serialize)]
+struct CacheStatsResponse {
+    size: usize,
+    hits: u64,
+    misses: u64,
+    hit_rate: f64,
+}
+
+async fn api_cache_stats(State(state): State<AppState>) -> Json<CacheStatsResponse> {
+    let (size, hits, misses) = state.upstream.cache_stats();
+    let total = hits + misses;
+    let hit_rate = if total > 0 {
+        hits as f64 / total as f64
+    } else {
+        0.0
+    };
+    Json(CacheStatsResponse {
+        size,
+        hits,
+        misses,
+        hit_rate,
+    })
+}
+
+async fn api_cache_flush(State(state): State<AppState>) -> StatusCode {
+    state.upstream.cache_flush();
+    info!("DNS cache flushed via API");
     StatusCode::OK
 }
 
