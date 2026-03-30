@@ -1156,12 +1156,19 @@ async fn api_set_blocklist_interval(
 
 // ==================== Version / Update ====================
 
-async fn api_version(State(state): State<AppState>) -> Json<crate::update::VersionInfo> {
+async fn api_version(
+    axum::Extension(_user): axum::Extension<AuthenticatedUser>,
+    State(state): State<AppState>,
+) -> Json<crate::update::VersionInfo> {
     Json(state.update_checker.check(false).await)
 }
 
-async fn api_version_check(State(state): State<AppState>) -> Json<crate::update::VersionInfo> {
-    Json(state.update_checker.check(true).await)
+async fn api_version_check(
+    axum::Extension(user): axum::Extension<AuthenticatedUser>,
+    State(state): State<AppState>,
+) -> Result<Json<crate::update::VersionInfo>, Response> {
+    require_permission(&user, Permission::ManageSystem)?;
+    Ok(Json(state.update_checker.check(true).await))
 }
 
 #[derive(Serialize)]
