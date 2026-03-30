@@ -2121,8 +2121,8 @@
                     <div class="feature-card ${f.enabled ? 'active' : ''}" id="feature-${f.id}">
                         <div class="feature-icon ${f.icon}">${FEATURE_ICONS[f.icon] || '?'}</div>
                         <div class="feature-info">
-                            <h3>${f.name}</h3>
-                            <p>${f.description}</p>
+                            <h3>${escapeHtml(f.name)}</h3>
+                            <p>${escapeHtml(f.description)}</p>
                             <div class="feature-status" id="status-${f.id}">${f.enabled ? 'Active' : 'Disabled'}</div>
                         </div>
                         <label class="toggle-switch" id="toggle-${f.id}">
@@ -2201,7 +2201,7 @@
                 simpleBody.innerHTML = queries.slice(0, 50).map(q => `
                     <tr>
                         <td>${new Date(q.timestamp).toLocaleTimeString()}</td>
-                        <td>${q.domain}</td>
+                        <td>${escapeHtml(q.domain)}</td>
                         <td><span class="badge ${q.blocked ? 'blocked' : (q.upstream === 'safe-search' ? 'rewrite' : 'allowed')}">
                             ${q.blocked ? 'BLOCKED' : (q.upstream === 'safe-search' ? 'SAFE' : 'OK')}
                         </span></td>
@@ -2214,13 +2214,13 @@
                     body.innerHTML = queries.map(q => `
                         <tr>
                             <td>${new Date(q.timestamp).toLocaleTimeString()}</td>
-                            <td>${q.domain}</td>
-                            <td>${q.query_type}</td>
-                            <td>${q.client_ip}</td>
+                            <td>${escapeHtml(q.domain)}</td>
+                            <td>${escapeHtml(q.query_type)}</td>
+                            <td>${escapeHtml(q.client_ip)}</td>
                             <td><span class="badge ${q.blocked ? 'blocked' : (q.upstream === 'safe-search' ? 'rewrite' : 'allowed')}">
                                 ${q.blocked ? 'BLOCKED' : (q.upstream === 'safe-search' ? 'SAFE' : 'OK')}
                             </span></td>
-                            <td>${q.upstream || '-'}</td>
+                            <td>${escapeHtml(q.upstream) || '-'}</td>
                             <td>${q.response_time_ms}</td>
                         </tr>
                     `).join('');
@@ -2267,8 +2267,8 @@
                 } else {
                     domains.forEach(d => {
                         const li = document.createElement('li');
-                        const removeBtn = hasPerm('manage_blocklists') ? `<button class="btn btn-danger btn-sm" onclick="removeCustomBlocked('${d}')">Remove</button>` : '';
-                        li.innerHTML = `<span>${d}</span>${removeBtn}`;
+                        const removeBtn = hasPerm('manage_blocklists') ? `<button class="btn btn-danger btn-sm" onclick="removeCustomBlocked('${escapeHtml(d)}')">Remove</button>` : '';
+                        li.innerHTML = `<span>${escapeHtml(d)}</span>${removeBtn}`;
                         el.appendChild(li);
                     });
                 }
@@ -2311,8 +2311,8 @@
                 } else {
                     domains.forEach(d => {
                         const li = document.createElement('li');
-                        const removeBtn = hasPerm('manage_allowlist') ? `<button class="btn btn-danger btn-sm" onclick="removeAllowlisted('${d}')">Remove</button>` : '';
-                        li.innerHTML = `<span>${d}</span>${removeBtn}`;
+                        const removeBtn = hasPerm('manage_allowlist') ? `<button class="btn btn-danger btn-sm" onclick="removeAllowlisted('${escapeHtml(d)}')">Remove</button>` : '';
+                        li.innerHTML = `<span>${escapeHtml(d)}</span>${removeBtn}`;
                         el.appendChild(li);
                     });
                 }
@@ -2924,7 +2924,7 @@
             if (!str) return '';
             const div = document.createElement('div');
             div.textContent = str;
-            return div.textContent;
+            return div.innerHTML;
         }
 
         function createLogRow(e) {

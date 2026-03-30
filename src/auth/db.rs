@@ -89,6 +89,51 @@ impl AuthDb {
         Ok(count == 0)
     }
 
+    /// Atomically create the first user (setup). Fails if any users already exist.
+    pub async fn create_first_user(
+        &self,
+        username: String,
+        password_hash: String,
+        permissions: Vec<Permission>,
+    ) -> anyhow::Result<User> {
+        let conn = self.conn.clone();
+        let user = conn
+            .call(move |conn| {
+                let count: i64 =
+                    conn.query_row("SELECT COUNT(*) FROM users", [], |row| row.get(0))?;
+                if count != 0 {
+                    return Err(tokio_rusqlite::Error::Other(
+                        anyhow::anyhow!("Setup already completed").into(),
+                    ));
+                }
+
+                let now = Utc::now().to_rfc3339();
+                conn.execute(
+                    "INSERT INTO users (username, password_hash, is_active, created_at, updated_at)
+                     VALUES (?1, ?2, 1, ?3, ?4)",
+                    params![username, password_hash, now, now],
+                )?;
+                let id = conn.last_insert_rowid();
+
+                for perm in &permissions {
+                    conn.execute(
+                        "INSERT OR IGNORE INTO user_permissions (user_id, permission) VALUES (?1, ?2)",
+                        params![id, perm.as_str()],
+                    )?;
+                }
+
+                let user = conn.query_row(
+                    "SELECT id, username, is_active, created_at, updated_at
+                     FROM users WHERE id = ?1",
+                    params![id],
+                    row_to_user,
+                )?;
+                Ok(user)
+            })
+            .await?;
+        Ok(user)
+    }
+
     /// Create a new user and insert the given permissions, returning the new User.
     pub async fn create_user(
         &self,
@@ -379,6 +424,17 @@ impl AuthDb {
         let conn = self.conn.clone();
         conn.call(move |conn| {
             conn.execute("DELETE FROM sessions WHERE id = ?1", params![token])?;
+            Ok(())
+        })
+        .await?;
+        Ok(())
+    }
+
+    /// Delete all sessions for a user (used on password change/reset).
+    pub async fn delete_sessions_for_user(&self, user_id: i64) -> anyhow::Result<()> {
+        let conn = self.conn.clone();
+        conn.call(move |conn| {
+            conn.execute("DELETE FROM sessions WHERE user_id = ?1", params![user_id])?;
             Ok(())
         })
         .await?;

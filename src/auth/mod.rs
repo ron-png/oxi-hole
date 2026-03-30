@@ -31,10 +31,31 @@ impl AuthService {
         password: &str,
         permissions: &[Permission],
     ) -> anyhow::Result<User> {
+        if password.len() < 8 {
+            anyhow::bail!("Password must be at least 8 characters");
+        }
         let hash = password::hash_password(password)
             .map_err(|e| anyhow::anyhow!("Failed to hash password: {}", e))?;
         self.db
             .create_user(username.to_string(), hash, permissions.to_vec())
+            .await
+    }
+
+    /// Atomically create the first admin user during setup.
+    /// Fails if any users already exist (race-safe).
+    pub async fn setup_admin(
+        &self,
+        username: &str,
+        password: &str,
+        permissions: &[Permission],
+    ) -> anyhow::Result<User> {
+        if password.len() < 8 {
+            anyhow::bail!("Password must be at least 8 characters");
+        }
+        let hash = password::hash_password(password)
+            .map_err(|e| anyhow::anyhow!("Failed to hash password: {}", e))?;
+        self.db
+            .create_first_user(username.to_string(), hash, permissions.to_vec())
             .await
     }
 
@@ -59,9 +80,10 @@ impl AuthService {
         }
 
         let token = generate_token();
+        let token_hash = hash_token(&token);
         self.db
             .create_session(
-                token.clone(),
+                token_hash,
                 user_with_hash.user.id,
                 ip_address.map(|s| s.to_string()),
             )
@@ -70,7 +92,8 @@ impl AuthService {
     }
 
     pub async fn validate_session(&self, token: &str) -> Option<AuthenticatedUser> {
-        let user_id = self.db.validate_session(token.to_string()).await.ok()??;
+        let hash = hash_token(token);
+        let user_id = self.db.validate_session(hash).await.ok()??;
         let user = self.db.get_user_by_id(user_id).await.ok()??;
         let permissions = self
             .db
@@ -96,7 +119,8 @@ impl AuthService {
     }
 
     pub async fn logout(&self, token: &str) {
-        let _ = self.db.delete_session(token.to_string()).await;
+        let hash = hash_token(token);
+        let _ = self.db.delete_session(hash).await;
     }
 
     pub async fn create_api_token(
@@ -177,9 +201,14 @@ impl AuthService {
     }
 
     pub async fn reset_password(&self, user_id: i64, new_password: &str) -> anyhow::Result<()> {
+        if new_password.len() < 8 {
+            anyhow::bail!("Password must be at least 8 characters");
+        }
         let hash = password::hash_password(new_password)
             .map_err(|e| anyhow::anyhow!("Failed to hash password: {}", e))?;
-        self.db.update_password(user_id, hash).await
+        self.db.update_password(user_id, hash).await?;
+        self.db.delete_sessions_for_user(user_id).await?;
+        Ok(())
     }
 }
 

@@ -271,7 +271,7 @@ async fn api_auth_login(
     {
         Ok(session_token) => {
             let cookie = format!(
-                "oxi_session={}; HttpOnly; SameSite=Strict; Path=/; Max-Age=604800",
+                "oxi_session={}; HttpOnly; SameSite=Strict; Path=/; Max-Age=604800; Secure",
                 session_token
             );
             (
@@ -296,20 +296,10 @@ async fn api_auth_setup(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Json(req): Json<LoginRequest>,
 ) -> Response {
-    if !state.auth.needs_setup().await {
-        return (
-            StatusCode::CONFLICT,
-            Json(AuthErrorResponse {
-                error: "Setup already completed".to_string(),
-            }),
-        )
-            .into_response();
-    }
-
     let all_permissions: Vec<Permission> = Permission::ALL.to_vec();
     match state
         .auth
-        .create_user(&req.username, &req.password, &all_permissions)
+        .setup_admin(&req.username, &req.password, &all_permissions)
         .await
     {
         Ok(_user) => {
@@ -322,7 +312,7 @@ async fn api_auth_setup(
             {
                 Ok(session_token) => {
                     let cookie = format!(
-                        "oxi_session={}; HttpOnly; SameSite=Strict; Path=/; Max-Age=604800",
+                        "oxi_session={}; HttpOnly; SameSite=Strict; Path=/; Max-Age=604800; Secure",
                         session_token
                     );
                     (
@@ -367,7 +357,7 @@ async fn api_auth_logout(
         }
     }
 
-    let cookie = "oxi_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0";
+    let cookie = "oxi_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0; Secure";
     (
         StatusCode::OK,
         [(SET_COOKIE, cookie)],
@@ -479,8 +469,17 @@ async fn api_update_user(
 ) -> Result<StatusCode, Response> {
     require_permission(&user, Permission::ManageUsers)?;
 
-    // Cannot remove own manage_users permission
+    // Cannot deactivate your own account
     if id == user.id {
+        if req.is_active == Some(false) {
+            return Err((
+                StatusCode::FORBIDDEN,
+                Json(AuthErrorResponse {
+                    error: "Cannot deactivate your own account".to_string(),
+                }),
+            )
+                .into_response());
+        }
         if let Some(ref perms) = req.permissions {
             if !perms.contains(&Permission::ManageUsers) {
                 return Err((
