@@ -93,6 +93,7 @@ pub async fn run_web_server(listen: &[String], state: AppState) -> anyhow::Resul
         .route("/api/auth/setup", post(api_auth_setup))
         .route("/api/auth/logout", post(api_auth_logout))
         .route("/api/auth/me", get(api_auth_me))
+        .route("/api/auth/change-password", post(api_change_password))
         // User management
         .route("/api/users", get(api_list_users).post(api_create_user))
         .route(
@@ -255,8 +256,6 @@ async fn setup_page() -> Html<&'static str> {
 struct LoginRequest {
     username: String,
     password: String,
-    #[serde(default)]
-    display_name: Option<String>,
 }
 
 async fn api_auth_login(
@@ -313,7 +312,6 @@ async fn api_auth_setup(
         .create_user(
             &req.username,
             &req.password,
-            req.display_name.as_deref(),
             &all_permissions,
         )
         .await
@@ -395,19 +393,21 @@ struct CreateUserRequest {
     username: String,
     password: String,
     #[serde(default)]
-    display_name: Option<String>,
-    #[serde(default)]
     permissions: Vec<Permission>,
 }
 
 #[derive(Deserialize)]
 struct UpdateUserRequest {
     #[serde(default)]
-    display_name: Option<String>,
-    #[serde(default)]
     is_active: Option<bool>,
     #[serde(default)]
     permissions: Option<Vec<Permission>>,
+}
+
+#[derive(Deserialize)]
+struct ChangePasswordRequest {
+    current_password: String,
+    new_password: String,
 }
 
 #[derive(Deserialize)]
@@ -464,7 +464,6 @@ async fn api_create_user(
         .create_user(
             &req.username,
             &req.password,
-            req.display_name.as_deref(),
             &req.permissions,
         )
         .await
@@ -522,7 +521,6 @@ async fn api_update_user(
         .auth
         .update_user(
             id,
-            req.display_name.as_deref(),
             req.is_active,
             req.permissions.as_deref(),
         )
@@ -577,6 +575,33 @@ async fn api_reset_password(
     require_permission(&user, Permission::ManageUsers)?;
 
     match state.auth.reset_password(id, &req.password).await {
+        Ok(()) => Ok(StatusCode::OK),
+        Err(e) => Err((
+            StatusCode::BAD_REQUEST,
+            Json(AuthErrorResponse {
+                error: e.to_string(),
+            }),
+        )
+            .into_response()),
+    }
+}
+
+async fn api_change_password(
+    axum::Extension(user): axum::Extension<AuthenticatedUser>,
+    State(state): State<AppState>,
+    Json(req): Json<ChangePasswordRequest>,
+) -> Result<StatusCode, Response> {
+    if !state.auth.verify_password(user.id, &req.current_password).await {
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            Json(AuthErrorResponse {
+                error: "Current password is incorrect".to_string(),
+            }),
+        )
+            .into_response());
+    }
+
+    match state.auth.reset_password(user.id, &req.new_password).await {
         Ok(()) => Ok(StatusCode::OK),
         Err(e) => Err((
             StatusCode::BAD_REQUEST,

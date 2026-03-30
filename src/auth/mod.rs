@@ -29,18 +29,12 @@ impl AuthService {
         &self,
         username: &str,
         password: &str,
-        display_name: Option<&str>,
         permissions: &[Permission],
     ) -> anyhow::Result<User> {
         let hash = password::hash_password(password)
             .map_err(|e| anyhow::anyhow!("Failed to hash password: {}", e))?;
         self.db
-            .create_user(
-                username.to_string(),
-                hash,
-                display_name.map(|s| s.to_string()),
-                permissions.to_vec(),
-            )
+            .create_user(username.to_string(), hash, permissions.to_vec())
             .await
     }
 
@@ -86,7 +80,6 @@ impl AuthService {
         Some(AuthenticatedUser {
             id: user.id,
             username: user.username,
-            display_name: user.display_name,
             permissions,
         })
     }
@@ -98,7 +91,6 @@ impl AuthService {
         Some(AuthenticatedUser {
             id: user.id,
             username: user.username,
-            display_name: user.display_name,
             permissions: scoped_permissions,
         })
     }
@@ -150,7 +142,6 @@ impl AuthService {
     pub async fn update_user(
         &self,
         user_id: i64,
-        display_name: Option<&str>,
         is_active: Option<bool>,
         permissions: Option<&[Permission]>,
     ) -> anyhow::Result<()> {
@@ -165,9 +156,6 @@ impl AuthService {
         self.db
             .update_user(
                 user_id,
-                display_name
-                    .map(|s| s.to_string())
-                    .or(current_user.display_name),
                 is_active.unwrap_or(current_user.is_active),
                 permissions
                     .map(|p| p.to_vec())
@@ -178,6 +166,14 @@ impl AuthService {
 
     pub async fn delete_user(&self, user_id: i64) -> anyhow::Result<()> {
         self.db.delete_user(user_id).await
+    }
+
+    pub async fn verify_password(&self, user_id: i64, password: &str) -> bool {
+        let user_with_hash = match self.db.get_user_with_hash_by_id(user_id).await {
+            Ok(Some(u)) => u,
+            _ => return false,
+        };
+        password::verify_password(password, &user_with_hash.password_hash)
     }
 
     pub async fn reset_password(&self, user_id: i64, new_password: &str) -> anyhow::Result<()> {

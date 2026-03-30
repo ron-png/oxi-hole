@@ -1206,6 +1206,7 @@
                         <button class="user-menu-item" onclick="showTokensSection()">API Tokens</button>
                         <button class="user-menu-item manage-users-only" onclick="showUsersSection()">Users</button>
                         <div class="user-menu-divider"></div>
+                        <button class="user-menu-item" onclick="showChangePasswordModal()">Change Password</button>
                         <button class="user-menu-item danger" onclick="signOut()">Sign Out</button>
                     </div>
                 </div>
@@ -1539,7 +1540,6 @@
                     <thead>
                         <tr>
                             <th>Username</th>
-                            <th>Display Name</th>
                             <th>Status</th>
                             <th>Permissions</th>
                             <th>Created</th>
@@ -1619,7 +1619,7 @@
 
         function applyUserMenu() {
             if (!currentUser) return;
-            document.getElementById('userMenuName').textContent = currentUser.display_name || currentUser.username;
+            document.getElementById('userMenuName').textContent = currentUser.username;
         }
 
         function applyPermissionGating() {
@@ -1724,7 +1724,6 @@
                         : '<span class="badge blocked">Inactive</span>';
                     return `<tr>
                         <td>${escapeHtml(u.username)}</td>
-                        <td>${escapeHtml(u.display_name || '-')}</td>
                         <td>${statusBadge}</td>
                         <td><div class="perm-badges">${perms}</div></td>
                         <td>${created}</td>
@@ -1752,12 +1751,12 @@
                     <input type="text" id="newUsername" autocomplete="off">
                 </div>
                 <div class="form-group">
-                    <label>Display Name (optional)</label>
-                    <input type="text" id="newDisplayName" autocomplete="off">
-                </div>
-                <div class="form-group">
                     <label>Password</label>
                     <input type="password" id="newPassword" autocomplete="off">
+                </div>
+                <div class="form-group">
+                    <label>Confirm Password</label>
+                    <input type="password" id="newPasswordConfirm" autocomplete="off">
                 </div>
                 <div class="form-group">
                     <label>Permissions</label>
@@ -1773,14 +1772,15 @@
         async function createUser() {
             const username = document.getElementById('newUsername').value.trim();
             const password = document.getElementById('newPassword').value;
-            const display_name = document.getElementById('newDisplayName').value.trim() || null;
+            const passwordConfirm = document.getElementById('newPasswordConfirm').value;
             const permissions = Array.from(document.querySelectorAll('#newUserPerms input:checked')).map(cb => cb.value);
             if (!username || !password) { alert('Username and password are required.'); return; }
+            if (password !== passwordConfirm) { alert('Passwords do not match.'); return; }
             try {
                 const res = await fetch('/api/users', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ username, password, display_name, permissions })
+                    body: JSON.stringify({ username, password, permissions })
                 });
                 if (!res.ok) {
                     const data = await res.json().catch(() => ({}));
@@ -1809,10 +1809,6 @@
                 openModal(`
                     <h3>Edit User: ${escapeHtml(user.username)}</h3>
                     <div class="form-group">
-                        <label>Display Name</label>
-                        <input type="text" id="editDisplayName" value="${escapeHtml(user.display_name || '')}" autocomplete="off">
-                    </div>
-                    <div class="form-group">
                         <label>Active</label>
                         <label style="display:flex;align-items:center;gap:6px;font-size:13px;color:var(--text-secondary)">
                             <input type="checkbox" id="editIsActive" ${user.is_active ? 'checked' : ''} ${isSelf ? 'disabled' : ''}>
@@ -1832,14 +1828,13 @@
         }
 
         async function saveEditUser(userId) {
-            const display_name = document.getElementById('editDisplayName').value.trim() || null;
             const is_active = document.getElementById('editIsActive').checked;
             const permissions = Array.from(document.querySelectorAll('#editUserPerms input:checked')).map(cb => cb.value);
             try {
                 const res = await fetch('/api/users/' + userId, {
                     method: 'PUT',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ display_name, is_active, permissions })
+                    body: JSON.stringify({ is_active, permissions })
                 });
                 if (!res.ok) {
                     const data = await res.json().catch(() => ({}));
@@ -1882,6 +1877,51 @@
                     return;
                 }
                 closeModal();
+            } catch (e) { alert('Error: ' + e.message); }
+        }
+
+        function showChangePasswordModal() {
+            document.getElementById('userMenuDropdown').classList.remove('open');
+            openModal(`
+                <h3>Change Password</h3>
+                <div class="form-group">
+                    <label>Current Password</label>
+                    <input type="password" id="currentPassword" autocomplete="current-password">
+                </div>
+                <div class="form-group">
+                    <label>New Password</label>
+                    <input type="password" id="changeNewPassword" autocomplete="new-password">
+                </div>
+                <div class="form-group">
+                    <label>Confirm New Password</label>
+                    <input type="password" id="changeNewPasswordConfirm" autocomplete="new-password">
+                </div>
+                <div class="modal-actions">
+                    <button class="btn btn-sm" onclick="closeModal()">Cancel</button>
+                    <button class="btn btn-accent btn-sm" onclick="submitChangePassword()">Change Password</button>
+                </div>
+            `);
+        }
+
+        async function submitChangePassword() {
+            const current_password = document.getElementById('currentPassword').value;
+            const new_password = document.getElementById('changeNewPassword').value;
+            const confirmPassword = document.getElementById('changeNewPasswordConfirm').value;
+            if (!current_password || !new_password) { alert('All fields are required.'); return; }
+            if (new_password !== confirmPassword) { alert('New passwords do not match.'); return; }
+            try {
+                const res = await fetch('/api/auth/change-password', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ current_password, new_password })
+                });
+                if (!res.ok) {
+                    const data = await res.json().catch(() => ({}));
+                    alert('Failed: ' + (data.error || res.statusText));
+                    return;
+                }
+                closeModal();
+                alert('Password changed successfully.');
             } catch (e) { alert('Error: ' + e.message); }
         }
 

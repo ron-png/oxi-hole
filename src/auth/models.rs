@@ -61,7 +61,6 @@ impl Permission {
 pub struct User {
     pub id: i64,
     pub username: String,
-    pub display_name: Option<String>,
     pub is_active: bool,
     pub created_at: String,
     pub updated_at: String,
@@ -77,7 +76,6 @@ pub struct UserWithHash {
 pub struct AuthenticatedUser {
     pub id: i64,
     pub username: String,
-    pub display_name: Option<String>,
     pub permissions: Vec<Permission>,
 }
 

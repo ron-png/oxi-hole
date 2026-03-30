@@ -28,7 +28,6 @@ impl AuthDb {
                      id            INTEGER PRIMARY KEY AUTOINCREMENT,
                      username      TEXT UNIQUE NOT NULL,
                      password_hash TEXT NOT NULL,
-                     display_name  TEXT,
                      is_active     INTEGER DEFAULT 1,
                      created_at    TEXT,
                      updated_at    TEXT
@@ -95,7 +94,6 @@ impl AuthDb {
         &self,
         username: String,
         password_hash: String,
-        display_name: Option<String>,
         permissions: Vec<Permission>,
     ) -> anyhow::Result<User> {
         let conn = self.conn.clone();
@@ -103,9 +101,9 @@ impl AuthDb {
             .call(move |conn| {
                 let now = Utc::now().to_rfc3339();
                 conn.execute(
-                    "INSERT INTO users (username, password_hash, display_name, is_active, created_at, updated_at)
-                     VALUES (?1, ?2, ?3, 1, ?4, ?5)",
-                    params![username, password_hash, display_name, now, now],
+                    "INSERT INTO users (username, password_hash, is_active, created_at, updated_at)
+                     VALUES (?1, ?2, 1, ?3, ?4)",
+                    params![username, password_hash, now, now],
                 )?;
                 let id = conn.last_insert_rowid();
 
@@ -117,7 +115,7 @@ impl AuthDb {
                 }
 
                 let user = conn.query_row(
-                    "SELECT id, username, display_name, is_active, created_at, updated_at
+                    "SELECT id, username, is_active, created_at, updated_at
                      FROM users WHERE id = ?1",
                     params![id],
                     row_to_user,
@@ -137,7 +135,7 @@ impl AuthDb {
         let result = conn
             .call(move |conn| {
                 let mut stmt = conn.prepare(
-                    "SELECT id, username, display_name, is_active, created_at, updated_at, password_hash
+                    "SELECT id, username, is_active, created_at, updated_at, password_hash
                      FROM users WHERE username = ?1",
                 )?;
                 let mut rows = stmt.query(params![username])?;
@@ -158,7 +156,7 @@ impl AuthDb {
         let result = conn
             .call(move |conn| {
                 let mut stmt = conn.prepare(
-                    "SELECT id, username, display_name, is_active, created_at, updated_at
+                    "SELECT id, username, is_active, created_at, updated_at
                      FROM users WHERE id = ?1",
                 )?;
                 let mut rows = stmt.query(params![user_id])?;
@@ -199,7 +197,7 @@ impl AuthDb {
         let users = conn
             .call(|conn| {
                 let mut stmt = conn.prepare(
-                    "SELECT id, username, display_name, is_active, created_at, updated_at
+                    "SELECT id, username, is_active, created_at, updated_at
                      FROM users ORDER BY id",
                 )?;
                 let rows = stmt.query_map([], row_to_user)?;
@@ -213,11 +211,10 @@ impl AuthDb {
         Ok(users)
     }
 
-    /// Update a user's display_name, is_active, and replace their permissions.
+    /// Update a user's is_active flag and replace their permissions.
     pub async fn update_user(
         &self,
         user_id: i64,
-        display_name: Option<String>,
         is_active: bool,
         permissions: Vec<Permission>,
     ) -> anyhow::Result<()> {
@@ -225,8 +222,8 @@ impl AuthDb {
         conn.call(move |conn| {
             let now = Utc::now().to_rfc3339();
             conn.execute(
-                "UPDATE users SET display_name = ?1, is_active = ?2, updated_at = ?3 WHERE id = ?4",
-                params![display_name, is_active as i64, now, user_id],
+                "UPDATE users SET is_active = ?1, updated_at = ?2 WHERE id = ?3",
+                params![is_active as i64, now, user_id],
             )?;
 
             conn.execute(
@@ -243,6 +240,26 @@ impl AuthDb {
         })
         .await?;
         Ok(())
+    }
+
+    /// Look up a user by id, returning the password hash too.
+    pub async fn get_user_with_hash_by_id(&self, user_id: i64) -> anyhow::Result<Option<UserWithHash>> {
+        let conn = self.conn.clone();
+        let result = conn
+            .call(move |conn| {
+                let mut stmt = conn.prepare(
+                    "SELECT id, username, is_active, created_at, updated_at, password_hash
+                     FROM users WHERE id = ?1",
+                )?;
+                let mut rows = stmt.query(params![user_id])?;
+                if let Some(row) = rows.next()? {
+                    Ok(Some(row_to_user_with_hash(row)?))
+                } else {
+                    Ok(None)
+                }
+            })
+            .await?;
+        Ok(result)
     }
 
     /// Delete a user (cascades to permissions, sessions, api_tokens).
@@ -514,28 +531,26 @@ impl AuthDb {
 // -------------------------------------------------------------------------
 
 fn row_to_user(row: &rusqlite::Row<'_>) -> rusqlite::Result<User> {
-    let is_active: i64 = row.get(3)?;
+    let is_active: i64 = row.get(2)?;
     Ok(User {
         id: row.get(0)?,
         username: row.get(1)?,
-        display_name: row.get(2)?,
         is_active: is_active != 0,
-        created_at: row.get(4).unwrap_or_default(),
-        updated_at: row.get(5).unwrap_or_default(),
+        created_at: row.get(3).unwrap_or_default(),
+        updated_at: row.get(4).unwrap_or_default(),
     })
 }
 
 fn row_to_user_with_hash(row: &rusqlite::Row<'_>) -> rusqlite::Result<UserWithHash> {
-    let is_active: i64 = row.get(3)?;
+    let is_active: i64 = row.get(2)?;
     let user = User {
         id: row.get(0)?,
         username: row.get(1)?,
-        display_name: row.get(2)?,
         is_active: is_active != 0,
-        created_at: row.get(4).unwrap_or_default(),
-        updated_at: row.get(5).unwrap_or_default(),
+        created_at: row.get(3).unwrap_or_default(),
+        updated_at: row.get(4).unwrap_or_default(),
     };
-    let password_hash: String = row.get(6)?;
+    let password_hash: String = row.get(5)?;
     Ok(UserWithHash {
         user,
         password_hash,
