@@ -3,6 +3,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{info, warn};
 use chrono::Utc;
+use serde::Serialize;
 
 /// Result of checking whether a domain is blocked.
 #[derive(Debug, Clone, PartialEq)]
@@ -34,6 +35,30 @@ pub struct BlocklistManager {
     last_refreshed_at: Arc<RwLock<Option<chrono::DateTime<chrono::Utc>>>>,
     /// Whether a refresh is currently in progress (concurrency guard)
     refreshing: Arc<std::sync::atomic::AtomicBool>,
+}
+
+/// Progress event emitted during a streaming blocklist refresh.
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "type")]
+pub enum RefreshEvent {
+    #[serde(rename = "progress")]
+    Progress {
+        source: String,
+        index: usize,
+        total: usize,
+        status: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        domains: Option<usize>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    },
+    #[serde(rename = "done")]
+    Done {
+        total_domains: usize,
+        sources_ok: usize,
+        sources_failed: usize,
+        refreshed_at: String,
+    },
 }
 
 impl BlocklistManager {
@@ -350,6 +375,83 @@ impl BlocklistManager {
             "Blocklist refresh complete: {} total blocked domains",
             total
         );
+    }
+
+    /// Re-fetch all blocklist sources, sending progress events through the channel.
+    /// Returns false if a refresh is already in progress.
+    pub async fn refresh_sources_streaming(
+        &self,
+        tx: tokio::sync::mpsc::Sender<RefreshEvent>,
+    ) -> bool {
+        let sources = self.sources.read().await.clone();
+
+        if !self.try_start_refresh() {
+            return false;
+        }
+
+        let total = sources.len();
+        let mut new_src_map = HashMap::new();
+        let mut all_domains = HashSet::new();
+        let mut sources_ok: usize = 0;
+        let mut sources_failed: usize = 0;
+
+        for (i, source) in sources.iter().enumerate() {
+            match self.fetch_blocklist(source).await {
+                Ok(entries) => {
+                    let count = entries.len();
+                    info!("Refreshed {} entries from {}", count, source);
+                    let set: HashSet<String> = entries.into_iter().collect();
+                    all_domains.extend(set.clone());
+                    new_src_map.insert(source.clone(), set);
+                    sources_ok += 1;
+                    let _ = tx.send(RefreshEvent::Progress {
+                        source: source.clone(),
+                        index: i + 1,
+                        total,
+                        status: "ok".to_string(),
+                        domains: Some(count),
+                        error: None,
+                    }).await;
+                }
+                Err(e) => {
+                    warn!("Failed to refresh blocklist {}: {}", source, e);
+                    let existing = self.source_domains.read().await;
+                    if let Some(existing_set) = existing.get(source) {
+                        all_domains.extend(existing_set.clone());
+                        new_src_map.insert(source.clone(), existing_set.clone());
+                    }
+                    sources_failed += 1;
+                    let _ = tx.send(RefreshEvent::Progress {
+                        source: source.clone(),
+                        index: i + 1,
+                        total,
+                        status: "error".to_string(),
+                        domains: None,
+                        error: Some(e.to_string()),
+                    }).await;
+                }
+            }
+        }
+
+        let custom = self.custom_blocked.read().await;
+        all_domains.extend(custom.clone());
+
+        let total_domains = all_domains.len();
+        *self.source_domains.write().await = new_src_map;
+        *self.blocked.write().await = all_domains;
+
+        self.finish_refresh().await;
+
+        let refreshed_at = Utc::now().to_rfc3339();
+        let _ = tx.send(RefreshEvent::Done {
+            total_domains,
+            sources_ok,
+            sources_failed,
+            refreshed_at,
+        }).await;
+
+        info!("Blocklist refresh complete: {} total blocked domains", total_domains);
+        true
     }
 
     pub async fn add_custom_blocked(&self, domain: &str) {
