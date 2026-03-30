@@ -1,3 +1,4 @@
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::sync::Arc;
@@ -16,6 +17,7 @@ pub struct VersionInfo {
     pub update_available: bool,
     pub release_url: Option<String>,
     pub download_url: Option<String>,
+    pub last_checked_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Default)]
@@ -97,6 +99,7 @@ impl UpdateChecker {
             }
         }
 
+        let now = Utc::now().to_rfc3339();
         let info = match fetch_latest_release().await {
             Ok(release) => {
                 let latest = clean_version(&release.tag_name);
@@ -108,6 +111,7 @@ impl UpdateChecker {
                     update_available,
                     release_url: Some(release.html_url),
                     download_url,
+                    last_checked_at: Some(now),
                 }
             }
             Err(e) => {
@@ -118,6 +122,7 @@ impl UpdateChecker {
                     update_available: false,
                     release_url: None,
                     download_url: None,
+                    last_checked_at: Some(now),
                 }
             }
         };

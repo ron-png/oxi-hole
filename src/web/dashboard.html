@@ -1122,6 +1122,9 @@
                         </div>
                     </div>
                     <div id="updateMessage"></div>
+                    <div style="margin-top: 8px; font-size: 12px; color: var(--text-muted); font-family: var(--font-mono);">
+                        <span id="lastVersionCheckText">Last checked: never</span>
+                    </div>
                 </div>
             </div>
 
@@ -1935,6 +1938,25 @@
             } catch (e) { console.error('Failed to load version info', e); }
         }
 
+        let lastVersionCheckTime = null;
+        let versionCheckTimerInterval = null;
+
+        function updateVersionCheckTimer() {
+            const el = document.getElementById('lastVersionCheckText');
+            if (!lastVersionCheckTime) {
+                el.textContent = 'Last checked: never';
+                return;
+            }
+            const elapsed = Math.max(0, Date.now() - lastVersionCheckTime.getTime());
+            el.textContent = 'Last checked: ' + formatElapsed(elapsed) + ' ago';
+        }
+
+        function startVersionCheckTimer() {
+            if (versionCheckTimerInterval) clearInterval(versionCheckTimerInterval);
+            updateVersionCheckTimer();
+            versionCheckTimerInterval = setInterval(updateVersionCheckTimer, 1000);
+        }
+
         function showVersionInfo(info) {
             document.getElementById('currentVersion').textContent = 'v' + info.current_version;
             const status = document.getElementById('versionStatus');
@@ -1955,6 +1977,10 @@
                 status.textContent = '';
                 updateBtn.style.display = 'none';
                 msg.style.display = 'none';
+            }
+            if (info.last_checked_at) {
+                lastVersionCheckTime = new Date(info.last_checked_at);
+                startVersionCheckTimer();
             }
         }
 
