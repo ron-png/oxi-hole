@@ -32,6 +32,13 @@ UNINSTALL=0
 UPDATE=0
 VERBOSE=0
 
+# Legacy package name for backwards compatibility
+OLD_BINARY_NAME="oxi-hole"
+OLD_INSTALL_DIR="/opt/oxi-hole"
+OLD_CONFIG_DIR="/etc/oxi-hole"
+OLD_SERVICE_NAME="oxi-hole"
+OLD_LOG_DIR="/var/log/oxi-hole"
+
 # Save original arguments before getopts consumes them
 ORIG_ARGS="$*"
 
@@ -279,6 +286,101 @@ get_latest_version() {
 }
 
 # ============================================================================
+# Migrate from legacy oxi-hole package
+# ============================================================================
+
+detect_legacy_install() {
+    # Returns 0 if a legacy oxi-hole installation is detected
+    [ -f "${OLD_INSTALL_DIR}/${OLD_BINARY_NAME}" ] || \
+    [ -d "$OLD_CONFIG_DIR" ] || \
+    [ -f "/etc/systemd/system/${OLD_SERVICE_NAME}.service" ] || \
+    [ -f "/Library/LaunchDaemons/com.oxi-hole.server.plist" ] || \
+    [ -f "/etc/init.d/${OLD_SERVICE_NAME}" ] || \
+    id oxi-hole >/dev/null 2>&1
+}
+
+migrate_from_legacy() {
+    if ! detect_legacy_install; then
+        return 0
+    fi
+
+    log_step "Migrating from legacy oxi-hole installation"
+
+    # Stop old service
+    detect_init_system
+    case "$INIT_SYSTEM" in
+        systemd)
+            systemctl stop "$OLD_SERVICE_NAME" 2>/dev/null || true
+            systemctl disable "$OLD_SERVICE_NAME" 2>/dev/null || true
+            rm -f "/etc/systemd/system/${OLD_SERVICE_NAME}.service"
+            systemctl daemon-reload 2>/dev/null || true
+            log_info "Old systemd service removed"
+            ;;
+        launchd)
+            launchctl unload "/Library/LaunchDaemons/com.oxi-hole.server.plist" 2>/dev/null || true
+            rm -f "/Library/LaunchDaemons/com.oxi-hole.server.plist"
+            log_info "Old launchd service removed"
+            ;;
+        openrc)
+            rc-service "$OLD_SERVICE_NAME" stop 2>/dev/null || true
+            rc-update del "$OLD_SERVICE_NAME" default 2>/dev/null || true
+            rm -f "/etc/init.d/${OLD_SERVICE_NAME}"
+            log_info "Old OpenRC service removed"
+            ;;
+    esac
+
+    # Migrate config directory (preserve user config)
+    if [ -d "$OLD_CONFIG_DIR" ] && [ ! -d "$CONFIG_DIR" ]; then
+        mv "$OLD_CONFIG_DIR" "$CONFIG_DIR"
+        log_info "Config migrated: ${OLD_CONFIG_DIR} -> ${CONFIG_DIR}"
+    elif [ -d "$OLD_CONFIG_DIR" ]; then
+        log_info "New config dir already exists; old config preserved at ${OLD_CONFIG_DIR}"
+    fi
+
+    # Migrate log directory
+    if [ -d "$OLD_LOG_DIR" ] && [ ! -d "$LOG_DIR" ]; then
+        mv "$OLD_LOG_DIR" "$LOG_DIR"
+        log_info "Logs migrated: ${OLD_LOG_DIR} -> ${LOG_DIR}"
+    elif [ -d "$OLD_LOG_DIR" ]; then
+        rm -rf "$OLD_LOG_DIR"
+        log_info "Old log directory removed"
+    fi
+
+    # Remove old binary and symlink
+    rm -f "${OLD_INSTALL_DIR}/${OLD_BINARY_NAME}"
+    rm -f "${OLD_INSTALL_DIR}/${OLD_BINARY_NAME}.bak"
+    rmdir "$OLD_INSTALL_DIR" 2>/dev/null || true
+    rm -f "/usr/local/bin/${OLD_BINARY_NAME}"
+    log_info "Old binary removed"
+
+    # Migrate system user from oxi-hole to oxi-dns
+    if id oxi-hole >/dev/null 2>&1; then
+        case "$OS" in
+            darwin)
+                dscl . -delete /Users/oxi-hole 2>/dev/null || true
+                ;;
+            freebsd|openbsd)
+                if command -v pw >/dev/null 2>&1; then
+                    pw userdel oxi-hole 2>/dev/null || true
+                fi
+                ;;
+            *)
+                userdel oxi-hole 2>/dev/null || true
+                ;;
+        esac
+        log_info "Old system user 'oxi-hole' removed"
+    fi
+
+    # Clean up old resolved config if present
+    if [ -f /etc/systemd/resolved.conf.d/oxi-hole.conf ]; then
+        rm -f /etc/systemd/resolved.conf.d/oxi-hole.conf
+        log_info "Old resolved drop-in removed"
+    fi
+
+    log_info "Migration from oxi-hole complete"
+}
+
+# ============================================================================
 # Install
 # ============================================================================
 
@@ -288,6 +390,7 @@ do_install() {
     detect_os
     detect_arch
     check_dependencies
+    migrate_from_legacy
     get_latest_version
 
     # Check if already installed, compare versions and update if necessary
@@ -377,6 +480,13 @@ do_install() {
         rm -f "/usr/local/bin/${BINARY_NAME}"
         rm -rf "$CONFIG_DIR"
         rm -rf "$LOG_DIR"
+        # Also purge any remaining legacy oxi-hole paths
+        rm -f "${OLD_INSTALL_DIR}/${OLD_BINARY_NAME}"
+        rm -f "${OLD_INSTALL_DIR}/${OLD_BINARY_NAME}.bak"
+        rmdir "$OLD_INSTALL_DIR" 2>/dev/null || true
+        rm -f "/usr/local/bin/${OLD_BINARY_NAME}"
+        rm -rf "$OLD_CONFIG_DIR"
+        rm -rf "$OLD_LOG_DIR"
         if id oxi-dns >/dev/null 2>&1; then
             case "$OS" in
                 darwin)
@@ -389,6 +499,21 @@ do_install() {
                     ;;
                 *)
                     userdel oxi-dns 2>/dev/null || true
+                    ;;
+            esac
+        fi
+        if id oxi-hole >/dev/null 2>&1; then
+            case "$OS" in
+                darwin)
+                    dscl . -delete /Users/oxi-hole 2>/dev/null || true
+                    ;;
+                freebsd|openbsd)
+                    if command -v pw >/dev/null 2>&1; then
+                        pw userdel oxi-hole 2>/dev/null || true
+                    fi
+                    ;;
+                *)
+                    userdel oxi-hole 2>/dev/null || true
                     ;;
             esac
         fi
@@ -496,15 +621,17 @@ do_install() {
 do_update() {
     log_step "Updating Oxi-DNS"
 
-    if [ ! -f "${INSTALL_DIR}/${BINARY_NAME}" ]; then
-        log_error "Oxi-DNS is not installed at ${INSTALL_DIR}/${BINARY_NAME}"
-        log_error "Run the installer without -U to perform a fresh install."
-        exit 1
-    fi
-
     detect_os
     detect_arch
     check_dependencies
+    migrate_from_legacy
+
+    if [ ! -f "${INSTALL_DIR}/${BINARY_NAME}" ]; then
+        log_info "No existing oxi-dns binary found. Performing fresh install instead."
+        do_install
+        return
+    fi
+
     get_latest_version
 
     # Compare versions
@@ -585,6 +712,46 @@ do_update() {
 
 do_uninstall() {
     log_step "Uninstalling Oxi-DNS"
+
+    detect_os
+
+    # Clean up any legacy oxi-hole installation too
+    if detect_legacy_install; then
+        log_info "Cleaning up legacy oxi-hole installation..."
+        detect_init_system
+        case "$INIT_SYSTEM" in
+            systemd)
+                systemctl stop "$OLD_SERVICE_NAME" 2>/dev/null || true
+                systemctl disable "$OLD_SERVICE_NAME" 2>/dev/null || true
+                rm -f "/etc/systemd/system/${OLD_SERVICE_NAME}.service"
+                systemctl daemon-reload 2>/dev/null || true
+                ;;
+            launchd)
+                launchctl unload "/Library/LaunchDaemons/com.oxi-hole.server.plist" 2>/dev/null || true
+                rm -f "/Library/LaunchDaemons/com.oxi-hole.server.plist"
+                ;;
+            openrc)
+                rc-service "$OLD_SERVICE_NAME" stop 2>/dev/null || true
+                rc-update del "$OLD_SERVICE_NAME" default 2>/dev/null || true
+                rm -f "/etc/init.d/${OLD_SERVICE_NAME}"
+                ;;
+        esac
+        rm -f "${OLD_INSTALL_DIR}/${OLD_BINARY_NAME}"
+        rm -f "${OLD_INSTALL_DIR}/${OLD_BINARY_NAME}.bak"
+        rmdir "$OLD_INSTALL_DIR" 2>/dev/null || true
+        rm -f "/usr/local/bin/${OLD_BINARY_NAME}"
+        rm -rf "$OLD_CONFIG_DIR"
+        rm -rf "$OLD_LOG_DIR"
+        rm -f /etc/systemd/resolved.conf.d/oxi-hole.conf
+        if id oxi-hole >/dev/null 2>&1; then
+            case "$OS" in
+                darwin)   dscl . -delete /Users/oxi-hole 2>/dev/null || true ;;
+                freebsd|openbsd) command -v pw >/dev/null 2>&1 && pw userdel oxi-hole 2>/dev/null || true ;;
+                *)        userdel oxi-hole 2>/dev/null || true ;;
+            esac
+        fi
+        log_info "Legacy oxi-hole installation cleaned up"
+    fi
 
     # Stop and disable service
     log_info "Stopping service..."
