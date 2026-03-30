@@ -45,3 +45,4 @@ hyper-util = { version = "0.1", features = ["tokio"] }
 tower-service = "0.3"
 webpki-roots = "1"
 rand = "0.9"
+async-stream = "0.3.6"

@@ -8,9 +8,12 @@ use crate::update::UpdateChecker;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::Html;
+use axum::response::sse::{Event, Sse};
 use axum::routing::{get, post};
 use axum::Json;
 use axum::Router;
+use futures::stream::Stream;
+use std::convert::Infallible;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
@@ -101,6 +104,15 @@ pub async fn run_web_server(listen: &[String], state: AppState) -> anyhow::Resul
         .route(
             "/api/blocklist-source/remove",
             post(api_remove_blocklist_source),
+        )
+        // Blocklist refresh
+        .route(
+            "/api/blocklist-sources/refresh",
+            get(api_blocklist_refresh_sse),
+        )
+        .route(
+            "/api/blocklist-sources/last-refresh",
+            get(api_blocklist_last_refresh),
         )
         // Upstream info
         .route("/api/upstreams", get(api_upstreams))
@@ -458,6 +470,50 @@ async fn api_remove_blocklist_source(
     info!("Removed blocklist source: {}", req.url);
     state.save_config().await;
     StatusCode::OK
+}
+
+// ==================== Blocklist Refresh ====================
+
+#[derive(Serialize)]
+struct LastRefreshResponse {
+    refreshed_at: Option<String>,
+}
+
+async fn api_blocklist_last_refresh(
+    State(state): State<AppState>,
+) -> Json<LastRefreshResponse> {
+    let ts = state.blocklist.get_last_refreshed_at().await;
+    Json(LastRefreshResponse {
+        refreshed_at: ts.map(|t| t.to_rfc3339()),
+    })
+}
+
+async fn api_blocklist_refresh_sse(
+    State(state): State<AppState>,
+) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, StatusCode> {
+    if state.blocklist.is_refreshing() {
+        return Err(StatusCode::CONFLICT);
+    }
+
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<crate::blocklist::RefreshEvent>(32);
+    let blocklist = state.blocklist.clone();
+
+    tokio::spawn(async move {
+        blocklist.refresh_sources_streaming(tx).await;
+    });
+
+    let stream = async_stream::stream! {
+        while let Some(event) = rx.recv().await {
+            let event_type = match &event {
+                crate::blocklist::RefreshEvent::Progress { .. } => "progress",
+                crate::blocklist::RefreshEvent::Done { .. } => "done",
+            };
+            let data = serde_json::to_string(&event).unwrap_or_default();
+            yield Ok(Event::default().event(event_type).data(data));
+        }
+    };
+
+    Ok(Sse::new(stream))
 }
 
 // ==================== Upstreams ====================
