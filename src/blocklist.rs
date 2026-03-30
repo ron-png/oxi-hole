@@ -1,9 +1,9 @@
+use chrono::Utc;
+use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{info, warn};
-use chrono::Utc;
-use serde::Serialize;
 
 /// Result of checking whether a domain is blocked.
 #[derive(Debug, Clone, PartialEq)]
@@ -379,10 +379,7 @@ impl BlocklistManager {
 
     /// Re-fetch all blocklist sources, sending progress events through the channel.
     /// Caller must have already acquired the refresh lock via `try_start_refresh()`.
-    pub async fn refresh_sources_streaming(
-        &self,
-        tx: tokio::sync::mpsc::Sender<RefreshEvent>,
-    ) {
+    pub async fn refresh_sources_streaming(&self, tx: tokio::sync::mpsc::Sender<RefreshEvent>) {
         let sources = self.sources.read().await.clone();
 
         let total = sources.len();
@@ -400,14 +397,16 @@ impl BlocklistManager {
                     all_domains.extend(set.clone());
                     new_src_map.insert(source.clone(), set);
                     sources_ok += 1;
-                    let _ = tx.send(RefreshEvent::Progress {
-                        source: source.clone(),
-                        index: i + 1,
-                        total,
-                        status: "ok".to_string(),
-                        domains: Some(count),
-                        error: None,
-                    }).await;
+                    let _ = tx
+                        .send(RefreshEvent::Progress {
+                            source: source.clone(),
+                            index: i + 1,
+                            total,
+                            status: "ok".to_string(),
+                            domains: Some(count),
+                            error: None,
+                        })
+                        .await;
                 }
                 Err(e) => {
                     warn!("Failed to refresh blocklist {}: {}", source, e);
@@ -417,14 +416,16 @@ impl BlocklistManager {
                         new_src_map.insert(source.clone(), existing_set.clone());
                     }
                     sources_failed += 1;
-                    let _ = tx.send(RefreshEvent::Progress {
-                        source: source.clone(),
-                        index: i + 1,
-                        total,
-                        status: "error".to_string(),
-                        domains: None,
-                        error: Some(e.to_string()),
-                    }).await;
+                    let _ = tx
+                        .send(RefreshEvent::Progress {
+                            source: source.clone(),
+                            index: i + 1,
+                            total,
+                            status: "error".to_string(),
+                            domains: None,
+                            error: Some(e.to_string()),
+                        })
+                        .await;
                 }
             }
         }
@@ -438,17 +439,23 @@ impl BlocklistManager {
 
         let now = Utc::now();
         *self.last_refreshed_at.write().await = Some(now);
-        self.refreshing.store(false, std::sync::atomic::Ordering::SeqCst);
+        self.refreshing
+            .store(false, std::sync::atomic::Ordering::SeqCst);
 
         let refreshed_at = now.to_rfc3339();
-        let _ = tx.send(RefreshEvent::Done {
-            total_domains,
-            sources_ok,
-            sources_failed,
-            refreshed_at,
-        }).await;
+        let _ = tx
+            .send(RefreshEvent::Done {
+                total_domains,
+                sources_ok,
+                sources_failed,
+                refreshed_at,
+            })
+            .await;
 
-        info!("Blocklist refresh complete: {} total blocked domains", total_domains);
+        info!(
+            "Blocklist refresh complete: {} total blocked domains",
+            total_domains
+        );
     }
 
     pub async fn add_custom_blocked(&self, domain: &str) {
@@ -490,25 +497,23 @@ impl BlocklistManager {
         *self.last_refreshed_at.read().await
     }
 
-    /// Check if a refresh is currently running.
-    pub fn is_refreshing(&self) -> bool {
-        self.refreshing.load(std::sync::atomic::Ordering::SeqCst)
-    }
-
     /// Try to acquire the refresh lock. Returns false if already refreshing.
     pub fn try_start_refresh(&self) -> bool {
-        self.refreshing.compare_exchange(
-            false,
-            true,
-            std::sync::atomic::Ordering::SeqCst,
-            std::sync::atomic::Ordering::SeqCst,
-        ).is_ok()
+        self.refreshing
+            .compare_exchange(
+                false,
+                true,
+                std::sync::atomic::Ordering::SeqCst,
+                std::sync::atomic::Ordering::SeqCst,
+            )
+            .is_ok()
     }
 
     /// Release the refresh lock and set the last_refreshed_at timestamp.
     pub async fn finish_refresh(&self) {
         *self.last_refreshed_at.write().await = Some(Utc::now());
-        self.refreshing.store(false, std::sync::atomic::Ordering::SeqCst);
+        self.refreshing
+            .store(false, std::sync::atomic::Ordering::SeqCst);
     }
 }
 

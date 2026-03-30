@@ -7,14 +7,14 @@ use crate::stats::Stats;
 use crate::update::UpdateChecker;
 use axum::extract::State;
 use axum::http::StatusCode;
-use axum::response::Html;
 use axum::response::sse::{Event, Sse};
+use axum::response::Html;
 use axum::routing::{get, post};
 use axum::Json;
 use axum::Router;
 use futures::stream::Stream;
-use std::convert::Infallible;
 use serde::{Deserialize, Serialize};
+use std::convert::Infallible;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use tracing::info;
@@ -479,9 +479,7 @@ struct LastRefreshResponse {
     refreshed_at: Option<String>,
 }
 
-async fn api_blocklist_last_refresh(
-    State(state): State<AppState>,
-) -> Json<LastRefreshResponse> {
+async fn api_blocklist_last_refresh(State(state): State<AppState>) -> Json<LastRefreshResponse> {
     let ts = state.blocklist.get_last_refreshed_at().await;
     Json(LastRefreshResponse {
         refreshed_at: ts.map(|t| t.to_rfc3339()),
