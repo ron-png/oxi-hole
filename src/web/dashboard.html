@@ -1211,11 +1211,10 @@
                 <div class="interval-row">
                     <div class="interval-label">
                         <span>Auto-refresh interval:</span>
-                        <input type="number" id="blocklistIntervalInput" min="0" />
+                        <input type="number" id="blocklistIntervalInput" min="0" onchange="setBlocklistInterval()" />
                         <span>minutes</span>
                         <span class="interval-hint">(0 = disabled)</span>
                     </div>
-                    <button class="btn btn-sm" onclick="setBlocklistInterval()">Save</button>
                 </div>
             </div>
 
@@ -1644,6 +1643,21 @@
                 }
             } catch (e) { console.error(e); }
             startRefreshTimer();
+            // Poll every 30s to detect background auto-refresh
+            setInterval(async () => {
+                try {
+                    const res = await fetch('/api/blocklist-sources/last-refresh');
+                    const data = await res.json();
+                    if (data.refreshed_at) {
+                        const t = new Date(data.refreshed_at);
+                        if (!lastRefreshedTime || t.getTime() !== lastRefreshedTime.getTime()) {
+                            lastRefreshedTime = t;
+                            updateRefreshTimer();
+                            refreshStats();
+                        }
+                    }
+                } catch (e) { /* ignore */ }
+            }, 30000);
         }
 
         function triggerRefresh() {
