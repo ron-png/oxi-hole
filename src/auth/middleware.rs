@@ -1,4 +1,4 @@
-use crate::auth::{AuthService, AuthenticatedUser};
+use crate::auth::AuthService;
 use axum::{
     body::Body,
     extract::Request,

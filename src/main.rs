@@ -198,6 +198,13 @@ async fn main() -> anyhow::Result<()> {
         .join("query_log.db");
     let query_log = query_log::QueryLog::open(&db_path).await?;
 
+    // Open auth database
+    let auth_db_path = config_path
+        .parent()
+        .unwrap_or(std::path::Path::new("."))
+        .join("auth.db");
+    let auth_service = auth::AuthService::open(&auth_db_path).await?;
+
     // Shared log settings
     let anonymize_ip = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(
         config.log.anonymize_client_ip,
@@ -286,6 +293,7 @@ async fn main() -> anyhow::Result<()> {
         log_retention_days,
         anonymize_ip,
         ipv6_enabled,
+        auth: auth_service,
     };
 
     // Spawn background blocklist refresh task
