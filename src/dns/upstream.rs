@@ -56,7 +56,7 @@ pub enum UpstreamSpec {
     },
     /// DNS-over-HTTPS (e.g., "https://dns10.quad9.net/dns-query")
     /// Addresses are pre-resolved at parse time to avoid infinite loops
-    /// when oxi-hole is itself the system DNS resolver.
+    /// when oxi-dns is itself the system DNS resolver.
     Https {
         url: String,
         hostname: String,
@@ -170,7 +170,7 @@ fn parse_url_host(url: &str) -> anyhow::Result<(String, u16)> {
 }
 
 /// Blocking hostname resolution, returning all addresses.
-/// Tries the system resolver first. If that fails (e.g. oxi-hole is the system DNS
+/// Tries the system resolver first. If that fails (e.g. oxi-dns is the system DNS
 /// and is restarting), falls back to iterative resolution from root servers.
 fn resolve_all_blocking(host: &str, port: u16) -> anyhow::Result<Vec<SocketAddr>> {
     use std::net::ToSocketAddrs;
@@ -230,7 +230,7 @@ async fn udp_query(
 
 /// Resolve a hostname to IP addresses by walking the DNS hierarchy from root servers.
 /// Standalone function — no UpstreamForwarder needed. Used as fallback when the
-/// system resolver is unavailable (e.g. oxi-hole is the system DNS and is restarting).
+/// system resolver is unavailable (e.g. oxi-dns is the system DNS and is restarting).
 async fn resolve_via_root_servers(host: &str, port: u16) -> anyhow::Result<Vec<SocketAddr>> {
     use hickory_proto::op::ResponseCode;
     use hickory_proto::rr::{Name, RData, RecordType};
@@ -593,7 +593,7 @@ impl UpstreamForwarder {
     }
 
     /// Add an upstream server. Resolves hostnames using existing configured upstreams
-    /// (not the system resolver) to avoid deadlocks when oxi-hole is the system DNS.
+    /// (not the system resolver) to avoid deadlocks when oxi-dns is the system DNS.
     pub async fn add_upstream(&self, s: &str) -> anyhow::Result<()> {
         let spec = if let Some(rest) = s.strip_prefix("tls://") {
             let (hostname, port, maybe_addr) = parse_host_port(rest, 853);

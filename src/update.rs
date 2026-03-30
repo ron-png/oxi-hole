@@ -4,9 +4,9 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{info, warn};
 
-const VERSION: &str = env!("OXIHOLE_VERSION");
+const VERSION: &str = env!("OXIDNS_VERSION");
 const REPO_OWNER: &str = "ron-png";
-const REPO_NAME: &str = "oxi-hole";
+const REPO_NAME: &str = "oxi-dns";
 pub const CHECK_INTERVAL: std::time::Duration = std::time::Duration::from_secs(8 * 60 * 60); // 8 hours
 
 #[derive(Debug, Clone, Serialize)]
@@ -151,7 +151,7 @@ impl UpdateChecker {
         let binary_bytes = extract_binary_from_tar_gz(&bytes)
             .map_err(|e| format!("Failed to extract update archive: {}", e))?;
 
-        let tmp_path = std::env::temp_dir().join("oxi-hole-update");
+        let tmp_path = std::env::temp_dir().join("oxi-dns-update");
         std::fs::write(&tmp_path, &binary_bytes)
             .map_err(|e| format!("Failed to write to temp location: {}", e))?;
 
@@ -329,7 +329,7 @@ pub async fn perform_robust_update(
         s.state = UpdateState::Restarting;
     }
 
-    let ready_path = std::env::temp_dir().join("oxi-hole.ready");
+    let ready_path = std::env::temp_dir().join("oxi-dns.ready");
     let _ = std::fs::remove_file(&ready_path);
 
     let mut child = match tokio::process::Command::new(current_exe)
@@ -442,7 +442,7 @@ async fn fetch_latest_release() -> anyhow::Result<GitHubRelease> {
     let client = reqwest::Client::new();
     let release: GitHubRelease = client
         .get(&url)
-        .header("User-Agent", format!("oxi-hole/{}", VERSION))
+        .header("User-Agent", format!("oxi-dns/{}", VERSION))
         .send()
         .await?
         .error_for_status()?

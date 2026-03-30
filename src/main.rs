@@ -1,6 +1,6 @@
 #[cfg(not(unix))]
 compile_error!(
-    "oxi-hole only supports Unix platforms (Linux, macOS, FreeBSD). Use Docker for other platforms."
+    "oxi-dns only supports Unix platforms (Linux, macOS, FreeBSD). Use Docker for other platforms."
 );
 
 mod blocklist;
@@ -17,7 +17,7 @@ use config::Config;
 use std::path::PathBuf;
 use tracing::info;
 
-const VERSION: &str = env!("OXIHOLE_VERSION");
+const VERSION: &str = env!("OXIDNS_VERSION");
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -31,7 +31,7 @@ async fn main() -> anyhow::Result<()> {
     while i < args.len() {
         match args[i].as_str() {
             "--version" | "-V" => {
-                println!("oxi-hole {}", VERSION);
+                println!("oxi-dns {}", VERSION);
                 return Ok(());
             }
             "--health-check" => health_check = true,
@@ -62,13 +62,13 @@ async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "oxi_hole=info".into()),
+                .unwrap_or_else(|_| "oxi_dns=info".into()),
         )
         .init();
 
     let config = Config::load(&config_path)?;
 
-    info!("Starting Oxi-Hole DNS server v{}", VERSION);
+    info!("Starting Oxi-DNS server v{}", VERSION);
     info!("DNS (UDP) listen: {:?}", config.dns.listen);
     if let Some(ref dot) = config.dns.dot_listen {
         info!("DNS-over-TLS listen: {:?}", dot);
@@ -233,7 +233,7 @@ async fn main() -> anyhow::Result<()> {
     });
 
     // Wait for DNS server to be ready before loading blocklists, so that
-    // machines using oxi-hole as their own resolver can fetch remote lists.
+    // machines using oxi-dns as their own resolver can fetch remote lists.
     let _ = dns_ready_rx.await;
 
     // In takeover mode, signal readiness via ready file

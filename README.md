@@ -1,4 +1,4 @@
-# Oxi-Hole — DNS Ad Blocker & Sinkhole Written in Rust
+# Oxi-DNS — DNS Ad Blocker & Sinkhole Written in Rust
 
 A fast, memory-safe DNS sinkhole that blocks ads, trackers, and malware at the network level. A modern alternative to Pi-hole and AdGuard Home, built from the ground up in Rust with encrypted DNS support.
 
@@ -6,7 +6,7 @@ Supports plain DNS (UDP), DNS-over-TLS (DoT), DNS-over-HTTPS (DoH), and DNS-over
 
 > **Early alpha** — under active development. Expect rough edges.
 
-## Why Oxi-Hole?
+## Why Oxi-DNS?
 
 - **Single binary, zero dependencies** — no Python, no PHP, no database server to maintain
 - **Encrypted DNS out of the box** — DoT, DoH, and DoQ alongside plain DNS
@@ -94,10 +94,10 @@ Available at `http://<host>:8080`:
 ### Install Script
 
 ```bash
-curl -sSL "https://raw.githubusercontent.com/ron-png/oxi-hole/master/scripts/install.sh" | sh
+curl -sSL "https://raw.githubusercontent.com/ron-png/oxi-dns/master/scripts/install.sh" | sh
 ```
 
-Installs the binary to `/opt/oxi-hole/`, config to `/etc/oxi-hole/config.toml`, and creates a systemd service.
+Installs the binary to `/opt/oxi-dns/`, config to `/etc/oxi-dns/config.toml`, and creates a systemd service.
 
 **Options** (pass via `sh -s -- <flags>`):
 
@@ -111,7 +111,7 @@ Installs the binary to `/opt/oxi-hole/`, config to `/etc/oxi-hole/config.toml`, 
 
 Example — install from the beta channel:
 ```bash
-curl -sSL "https://raw.githubusercontent.com/ron-png/oxi-hole/master/scripts/install.sh" | sh -s -- -c beta
+curl -sSL "https://raw.githubusercontent.com/ron-png/oxi-dns/master/scripts/install.sh" | sh -s -- -c beta
 ```
 
 ### Docker / Podman
@@ -120,21 +120,21 @@ Images are published to GHCR for `linux/amd64` and `linux/arm64`.
 
 ```bash
 docker run -d \
-  --name oxi-hole \
+  --name oxi-dns \
   -p 53:53/udp \
   -p 53:53/tcp \
   -p 8080:8080 \
-  -v oxi-hole-config:/etc/oxi-hole \
-  ghcr.io/ron-png/oxi-hole:latest
+  -v oxi-dns-config:/etc/oxi-dns \
+  ghcr.io/ron-png/oxi-dns:latest
 ```
 
 Docker Compose:
 
 ```yaml
 services:
-  oxi-hole:
-    image: ghcr.io/ron-png/oxi-hole:latest
-    container_name: oxi-hole
+  oxi-dns:
+    image: ghcr.io/ron-png/oxi-dns:latest
+    container_name: oxi-dns
     restart: unless-stopped
     ports:
       - "53:53/udp"
@@ -145,10 +145,10 @@ services:
       # - "443:443/tcp"   # DoH
       # - "853:853/udp"   # DoQ
     volumes:
-      - oxi-hole-config:/etc/oxi-hole
+      - oxi-dns-config:/etc/oxi-dns
 
 volumes:
-  oxi-hole-config:
+  oxi-dns-config:
 ```
 
 ## Configuration
@@ -183,7 +183,7 @@ Upstream formats: `udp://`, `tls://`, `https://`, `quic://` — defaults to UDP 
 ## Uninstall
 
 ```bash
-curl -sSL "https://raw.githubusercontent.com/ron-png/oxi-hole/master/scripts/install.sh" | sh -s -- -u
+curl -sSL "https://raw.githubusercontent.com/ron-png/oxi-dns/master/scripts/install.sh" | sh -s -- -u
 ```
 
 ## Contributing

@@ -15,7 +15,7 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
-  BINARY_NAME: oxi-hole
+  BINARY_NAME: oxi-dns
 
 jobs:
   prepare:
@@ -134,13 +134,13 @@ jobs:
         if: matrix.cross != true
         run: cargo build --release --target ${{ matrix.target }}
         env:
-          OXI_HOLE_VERSION: ${{ needs.prepare.outputs.version }}
+          OXI_DNS_VERSION: ${{ needs.prepare.outputs.version }}
 
       - name: Build (cross)
         if: matrix.cross
         run: cross build --release --target ${{ matrix.target }}
         env:
-          OXI_HOLE_VERSION: ${{ needs.prepare.outputs.version }}
+          OXI_DNS_VERSION: ${{ needs.prepare.outputs.version }}
 
       - name: Package (Unix)
         run: |

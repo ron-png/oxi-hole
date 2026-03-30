@@ -1,2 +1,2 @@
 [build.env]
-passthrough = ["OXI_HOLE_VERSION"]
+passthrough = ["OXI_DNS_VERSION"]

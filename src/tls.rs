@@ -112,14 +112,14 @@ fn load_or_generate_certs(
     }
 }
 
-/// Generate a self-signed certificate for localhost / oxi-hole.
+/// Generate a self-signed certificate for localhost / oxi-dns.
 fn generate_self_signed() -> anyhow::Result<(Vec<CertificateDer<'static>>, PrivateKeyDer<'static>)>
 {
     let mut params =
-        rcgen::CertificateParams::new(vec!["localhost".to_string(), "oxi-hole.local".to_string()])?;
+        rcgen::CertificateParams::new(vec!["localhost".to_string(), "oxi-dns.local".to_string()])?;
     params
         .distinguished_name
-        .push(rcgen::DnType::CommonName, "Oxi-Hole DNS Server");
+        .push(rcgen::DnType::CommonName, "Oxi-DNS Server");
     params
         .subject_alt_names
         .push(rcgen::SanType::IpAddress(std::net::IpAddr::V4(

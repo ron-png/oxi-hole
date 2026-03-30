@@ -1,8 +1,8 @@
 #!/bin/sh
 
-# Oxi-Hole install script
+# Oxi-DNS install script
 # Usage:
-#   curl -s -S -L "https://raw.githubusercontent.com/ron-png/oxi-hole/master/scripts/install.sh?v=$(date +%s)" | sh -s -- [options]
+#   curl -s -S -L "https://raw.githubusercontent.com/ron-png/oxi-dns/master/scripts/install.sh?v=$(date +%s)" | sh -s -- [options]
 #
 # Options:
 #   -r  Reinstall (purge all files and install fresh)
@@ -19,12 +19,12 @@ set -e
 # ============================================================================
 
 REPO_OWNER="ron-png"
-REPO_NAME="oxi-hole"
-BINARY_NAME="oxi-hole"
-INSTALL_DIR="/opt/oxi-hole"
-CONFIG_DIR="/etc/oxi-hole"
-SERVICE_NAME="oxi-hole"
-LOG_DIR="/var/log/oxi-hole"
+REPO_NAME="oxi-dns"
+BINARY_NAME="oxi-dns"
+INSTALL_DIR="/opt/oxi-dns"
+CONFIG_DIR="/etc/oxi-dns"
+SERVICE_NAME="oxi-dns"
+LOG_DIR="/var/log/oxi-dns"
 
 CHANNEL="stable"
 REINSTALL=0
@@ -75,14 +75,14 @@ log_step() {
 
 usage() {
     cat <<EOF
-Oxi-Hole Installer
+Oxi-DNS Installer
 
 Usage: $0 [options]
 
 Options:
   -c <channel>  Release channel: stable (default), beta, edge
   -r            Reinstall (purge all files and install fresh)
-  -u            Uninstall Oxi-Hole
+  -u            Uninstall Oxi-DNS
   -U            Update (download latest binary and restart service)
   -v            Verbose output
   -h            Show this help message
@@ -283,7 +283,7 @@ get_latest_version() {
 # ============================================================================
 
 do_install() {
-    log_step "Installing Oxi-Hole"
+    log_step "Installing Oxi-DNS"
 
     detect_os
     detect_arch
@@ -301,7 +301,7 @@ do_install() {
         LV_NUM="${LV_NUM:-0.0.0}"
 
         if [ "$CV_NUM" = "$LV_NUM" ]; then
-            log_info "Oxi-Hole is already installed and up to date (version: ${CV_NUM})"
+            log_info "Oxi-DNS is already installed and up to date (version: ${CV_NUM})"
             exit 0
         fi
 
@@ -309,12 +309,12 @@ do_install() {
         if command -v sort >/dev/null 2>&1 && printf '%s\n' "1" | sort -V >/dev/null 2>&1; then
             HIGHEST=$(printf "%s\n%s" "$CV_NUM" "$LV_NUM" | sort -V | tail -n1)
             if [ "$HIGHEST" = "$CV_NUM" ] && [ "$CV_NUM" != "$LV_NUM" ]; then
-                log_info "Oxi-Hole is already installed with a newer version (${CV_NUM}) than the latest release (${LV_NUM})."
+                log_info "Oxi-DNS is already installed with a newer version (${CV_NUM}) than the latest release (${LV_NUM})."
                 exit 0
             fi
         fi
 
-        log_info "Updating Oxi-Hole from version ${CV_NUM} to ${LV_NUM}"
+        log_info "Updating Oxi-DNS from version ${CV_NUM} to ${LV_NUM}"
     fi
 
     # Build download URL
@@ -331,7 +331,7 @@ do_install() {
     trap 'rm -rf "$TMPDIR"' EXIT
 
     # Download
-    log_step "Downloading Oxi-Hole ${VERSION}"
+    log_step "Downloading Oxi-DNS ${VERSION}"
     ARCHIVE_PATH="${TMPDIR}/${ARCHIVE_NAME}"
     download "$DOWNLOAD_URL" "$ARCHIVE_PATH"
 
@@ -377,18 +377,18 @@ do_install() {
         rm -f "/usr/local/bin/${BINARY_NAME}"
         rm -rf "$CONFIG_DIR"
         rm -rf "$LOG_DIR"
-        if id oxi-hole >/dev/null 2>&1; then
+        if id oxi-dns >/dev/null 2>&1; then
             case "$OS" in
                 darwin)
-                    dscl . -delete /Users/oxi-hole 2>/dev/null || true
+                    dscl . -delete /Users/oxi-dns 2>/dev/null || true
                     ;;
                 freebsd|openbsd)
                     if command -v pw >/dev/null 2>&1; then
-                        pw userdel oxi-hole 2>/dev/null || true
+                        pw userdel oxi-dns 2>/dev/null || true
                     fi
                     ;;
                 *)
-                    userdel oxi-hole 2>/dev/null || true
+                    userdel oxi-dns 2>/dev/null || true
                     ;;
             esac
         fi
@@ -423,7 +423,7 @@ do_install() {
     create_user
 
     # Set ownership
-    chown -R oxi-hole:oxi-hole "$INSTALL_DIR" "$CONFIG_DIR" "$LOG_DIR" 2>/dev/null || true
+    chown -R oxi-dns:oxi-dns "$INSTALL_DIR" "$CONFIG_DIR" "$LOG_DIR" 2>/dev/null || true
 
     # Install service
     log_step "Installing system service"
@@ -433,16 +433,16 @@ do_install() {
     check_port53
 
     # Enable and start
-    log_step "Starting Oxi-Hole"
+    log_step "Starting Oxi-DNS"
     enable_service
     start_service
 
-    # Verify oxi-hole is actually listening on port 53
+    # Verify oxi-dns is actually listening on port 53
     verify_running
 
     log_step "Installation complete!"
     printf "\n"
-    printf "  ${BOLD}Oxi-Hole has been installed successfully!${NC}\n"
+    printf "  ${BOLD}Oxi-DNS has been installed successfully!${NC}\n"
     printf "\n"
     printf "  ${CYAN}Binary:${NC}    ${INSTALL_DIR}/${BINARY_NAME}\n"
     printf "  ${CYAN}Config:${NC}    ${CONFIG_DIR}/config.toml\n"
@@ -471,9 +471,9 @@ do_install() {
             ;;
         launchd)
             printf "    sudo launchctl list | grep ${SERVICE_NAME}\n"
-            printf "    sudo launchctl unload /Library/LaunchDaemons/com.oxi-hole.server.plist\n"
-            printf "    sudo launchctl load /Library/LaunchDaemons/com.oxi-hole.server.plist\n"
-            printf "    tail -f ${LOG_DIR}/oxi-hole.log\n"
+            printf "    sudo launchctl unload /Library/LaunchDaemons/com.oxi-dns.server.plist\n"
+            printf "    sudo launchctl load /Library/LaunchDaemons/com.oxi-dns.server.plist\n"
+            printf "    tail -f ${LOG_DIR}/oxi-dns.log\n"
             ;;
         openrc)
             printf "    sudo rc-service ${SERVICE_NAME} status\n"
@@ -494,10 +494,10 @@ do_install() {
 # ============================================================================
 
 do_update() {
-    log_step "Updating Oxi-Hole"
+    log_step "Updating Oxi-DNS"
 
     if [ ! -f "${INSTALL_DIR}/${BINARY_NAME}" ]; then
-        log_error "Oxi-Hole is not installed at ${INSTALL_DIR}/${BINARY_NAME}"
+        log_error "Oxi-DNS is not installed at ${INSTALL_DIR}/${BINARY_NAME}"
         log_error "Run the installer without -U to perform a fresh install."
         exit 1
     fi
@@ -536,7 +536,7 @@ do_update() {
     TMPDIR=$(mktemp -d)
     trap 'rm -rf "$TMPDIR"' EXIT
 
-    log_step "Downloading Oxi-Hole ${VERSION}"
+    log_step "Downloading Oxi-DNS ${VERSION}"
     ARCHIVE_PATH="${TMPDIR}/${ARCHIVE_NAME}"
     download "$DOWNLOAD_URL" "$ARCHIVE_PATH"
 
@@ -564,7 +564,7 @@ do_update() {
     # Replace binary
     cp "$EXTRACTED_BINARY" "${INSTALL_DIR}/${BINARY_NAME}"
     chmod 755 "${INSTALL_DIR}/${BINARY_NAME}"
-    chown oxi-hole:oxi-hole "${INSTALL_DIR}/${BINARY_NAME}" 2>/dev/null || true
+    chown oxi-dns:oxi-dns "${INSTALL_DIR}/${BINARY_NAME}" 2>/dev/null || true
     log_info "Binary updated"
 
     # Restart service
@@ -575,7 +575,7 @@ do_update() {
 
     log_step "Update complete!"
     printf "\n"
-    printf "  ${BOLD}Oxi-Hole updated from v${CV_NUM} to v${LV_NUM}${NC}\n"
+    printf "  ${BOLD}Oxi-DNS updated from v${CV_NUM} to v${LV_NUM}${NC}\n"
     printf "\n"
 }
 
@@ -584,7 +584,7 @@ do_update() {
 # ============================================================================
 
 do_uninstall() {
-    log_step "Uninstalling Oxi-Hole"
+    log_step "Uninstalling Oxi-DNS"
 
     # Stop and disable service
     log_info "Stopping service..."
@@ -631,28 +631,28 @@ do_uninstall() {
     fi
 
     # Remove user
-    if id oxi-hole >/dev/null 2>&1; then
+    if id oxi-dns >/dev/null 2>&1; then
         case "$OS" in
             darwin)
-                dscl . -delete /Users/oxi-hole 2>/dev/null || true
+                dscl . -delete /Users/oxi-dns 2>/dev/null || true
                 ;;
             freebsd|openbsd)
                 if command -v pw >/dev/null 2>&1; then
-                    pw userdel oxi-hole 2>/dev/null || true
+                    pw userdel oxi-dns 2>/dev/null || true
                 fi
                 ;;
             *)
-                userdel oxi-hole 2>/dev/null || true
+                userdel oxi-dns 2>/dev/null || true
                 ;;
         esac
-        log_info "System user 'oxi-hole' removed"
+        log_info "System user 'oxi-dns' removed"
     fi
 
     # Restore DNS resolution
     restore_dns
 
     log_step "Uninstallation complete!"
-    log_info "Oxi-Hole has been removed from your system."
+    log_info "Oxi-DNS has been removed from your system."
 }
 
 # ============================================================================
@@ -660,34 +660,34 @@ do_uninstall() {
 # ============================================================================
 
 create_user() {
-    if ! id oxi-hole >/dev/null 2>&1; then
-        log_info "Creating system user 'oxi-hole'..."
+    if ! id oxi-dns >/dev/null 2>&1; then
+        log_info "Creating system user 'oxi-dns'..."
         case "$OS" in
             darwin)
                 # macOS: use dscl to create a system account
                 LAST_ID=$(dscl . -list /Users UniqueID 2>/dev/null | awk '{print $2}' | sort -n | tail -1)
                 NEXT_ID=$((LAST_ID + 1))
-                dscl . -create /Users/oxi-hole 2>/dev/null || true
-                dscl . -create /Users/oxi-hole UserShell /usr/bin/false 2>/dev/null || true
-                dscl . -create /Users/oxi-hole UniqueID "$NEXT_ID" 2>/dev/null || true
-                dscl . -create /Users/oxi-hole PrimaryGroupID 20 2>/dev/null || true
-                dscl . -create /Users/oxi-hole NFSHomeDirectory /var/empty 2>/dev/null || true
+                dscl . -create /Users/oxi-dns 2>/dev/null || true
+                dscl . -create /Users/oxi-dns UserShell /usr/bin/false 2>/dev/null || true
+                dscl . -create /Users/oxi-dns UniqueID "$NEXT_ID" 2>/dev/null || true
+                dscl . -create /Users/oxi-dns PrimaryGroupID 20 2>/dev/null || true
+                dscl . -create /Users/oxi-dns NFSHomeDirectory /var/empty 2>/dev/null || true
                 ;;
             freebsd|openbsd)
                 if command -v pw >/dev/null 2>&1; then
-                    pw useradd oxi-hole -s /usr/sbin/nologin -d /nonexistent -c "Oxi-Hole DNS" 2>/dev/null || true
+                    pw useradd oxi-dns -s /usr/sbin/nologin -d /nonexistent -c "Oxi-DNS DNS" 2>/dev/null || true
                 fi
                 ;;
             *)
                 if command -v useradd >/dev/null 2>&1; then
-                    useradd --system --no-create-home --shell /usr/sbin/nologin oxi-hole 2>/dev/null || true
+                    useradd --system --no-create-home --shell /usr/sbin/nologin oxi-dns 2>/dev/null || true
                 elif command -v adduser >/dev/null 2>&1; then
-                    adduser --system --no-create-home --disabled-login oxi-hole 2>/dev/null || true
+                    adduser --system --no-create-home --disabled-login oxi-dns 2>/dev/null || true
                 fi
                 ;;
         esac
     else
-        log_verbose "User 'oxi-hole' already exists"
+        log_verbose "User 'oxi-dns' already exists"
     fi
 }
 
@@ -746,7 +746,7 @@ install_service() {
             install_openrc_service
             ;;
         *)
-            log_warn "No supported init system detected. You'll need to start Oxi-Hole manually:"
+            log_warn "No supported init system detected. You'll need to start Oxi-DNS manually:"
             log_warn "  ${INSTALL_DIR}/${BINARY_NAME} ${CONFIG_DIR}/config.toml"
             ;;
     esac
@@ -755,15 +755,15 @@ install_service() {
 install_systemd_service() {
     cat > "/etc/systemd/system/${SERVICE_NAME}.service" <<EOF
 [Unit]
-Description=Oxi-Hole DNS Server
+Description=Oxi-DNS DNS Server
 Documentation=https://github.com/${REPO_OWNER}/${REPO_NAME}
 After=network.target network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-User=oxi-hole
-Group=oxi-hole
+User=oxi-dns
+Group=oxi-dns
 ExecStart=${INSTALL_DIR}/${BINARY_NAME} ${CONFIG_DIR}/config.toml
 Restart=always
 RestartSec=5
@@ -796,14 +796,14 @@ EOF
 }
 
 install_launchd_service() {
-    PLIST="/Library/LaunchDaemons/com.oxi-hole.server.plist"
+    PLIST="/Library/LaunchDaemons/com.oxi-dns.server.plist"
     cat > "$PLIST" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.oxi-hole.server</string>
+    <string>com.oxi-dns.server</string>
     <key>ProgramArguments</key>
     <array>
         <string>${INSTALL_DIR}/${BINARY_NAME}</string>
@@ -814,9 +814,9 @@ install_launchd_service() {
     <key>KeepAlive</key>
     <true/>
     <key>StandardOutPath</key>
-    <string>${LOG_DIR}/oxi-hole.log</string>
+    <string>${LOG_DIR}/oxi-dns.log</string>
     <key>StandardErrorPath</key>
-    <string>${LOG_DIR}/oxi-hole.err</string>
+    <string>${LOG_DIR}/oxi-dns.err</string>
 </dict>
 </plist>
 EOF
@@ -827,11 +827,11 @@ install_openrc_service() {
     cat > "/etc/init.d/${SERVICE_NAME}" <<EOF
 #!/sbin/openrc-run
 
-name="Oxi-Hole DNS Server"
+name="Oxi-DNS DNS Server"
 description="AdGuardHome-style DNS sinkhole"
 command="${INSTALL_DIR}/${BINARY_NAME}"
 command_args="${CONFIG_DIR}/config.toml"
-command_user="oxi-hole"
+command_user="oxi-dns"
 command_background=true
 pidfile="/run/${SERVICE_NAME}.pid"
 
@@ -848,7 +848,7 @@ start_service() {
     detect_init_system
     case "$INIT_SYSTEM" in
         systemd)  systemctl start "$SERVICE_NAME" ;;
-        launchd)  launchctl load "/Library/LaunchDaemons/com.oxi-hole.server.plist" ;;
+        launchd)  launchctl load "/Library/LaunchDaemons/com.oxi-dns.server.plist" ;;
         openrc)   rc-service "$SERVICE_NAME" start ;;
     esac
     log_info "Service started"
@@ -858,7 +858,7 @@ stop_service() {
     detect_init_system
     case "$INIT_SYSTEM" in
         systemd)  systemctl stop "$SERVICE_NAME" 2>/dev/null || true ;;
-        launchd)  launchctl unload "/Library/LaunchDaemons/com.oxi-hole.server.plist" 2>/dev/null || true ;;
+        launchd)  launchctl unload "/Library/LaunchDaemons/com.oxi-dns.server.plist" 2>/dev/null || true ;;
         openrc)   rc-service "$SERVICE_NAME" stop 2>/dev/null || true ;;
     esac
 }
@@ -888,7 +888,7 @@ remove_service() {
             log_info "Systemd service removed"
             ;;
         launchd)
-            rm -f "/Library/LaunchDaemons/com.oxi-hole.server.plist"
+            rm -f "/Library/LaunchDaemons/com.oxi-dns.server.plist"
             log_info "Launchd service removed"
             ;;
         openrc)
@@ -934,11 +934,11 @@ check_port53() {
         fix_systemd_resolved
     elif echo "$PORT53_INFO" | grep -q "dnsmasq"; then
         log_warn "dnsmasq is using port 53."
-        printf "${YELLOW}Stop and disable dnsmasq so Oxi-Hole can use port 53? [Y/n]: ${NC}"
+        printf "${YELLOW}Stop and disable dnsmasq so Oxi-DNS can use port 53? [Y/n]: ${NC}"
         read -r REPLY </dev/tty 2>/dev/null || REPLY="y"
         case "$REPLY" in
             [nN]|[nN][oO])
-                log_error "Port 53 is required for Oxi-Hole. Please free it manually and re-run the installer."
+                log_error "Port 53 is required for Oxi-DNS. Please free it manually and re-run the installer."
                 exit 1
                 ;;
             *)
@@ -986,11 +986,11 @@ check_port53() {
 
 fix_systemd_resolved() {
     log_warn "systemd-resolved is using port 53 (stub listener)."
-    printf "${YELLOW}Disable the systemd-resolved stub listener so Oxi-Hole can bind to port 53? [Y/n]: ${NC}"
+    printf "${YELLOW}Disable the systemd-resolved stub listener so Oxi-DNS can bind to port 53? [Y/n]: ${NC}"
     read -r REPLY </dev/tty 2>/dev/null || REPLY="y"
     case "$REPLY" in
         [nN]|[nN][oO])
-            log_error "Port 53 is required for Oxi-Hole. Please free it manually and re-run the installer."
+            log_error "Port 53 is required for Oxi-DNS. Please free it manually and re-run the installer."
             exit 1
             ;;
     esac
@@ -999,27 +999,27 @@ fix_systemd_resolved() {
 
     # Create drop-in config to disable stub listener
     mkdir -p /etc/systemd/resolved.conf.d
-    cat > /etc/systemd/resolved.conf.d/oxi-hole.conf <<'RESOLVEDEOF'
-# Created by Oxi-Hole installer
-# Disables the stub listener on 127.0.0.53:53 so Oxi-Hole can use port 53
+    cat > /etc/systemd/resolved.conf.d/oxi-dns.conf <<'RESOLVEDEOF'
+# Created by Oxi-DNS installer
+# Disables the stub listener on 127.0.0.53:53 so Oxi-DNS can use port 53
 [Resolve]
 DNSStubListener=no
 RESOLVEDEOF
 
-    # Point resolv.conf to oxi-hole once it's running
+    # Point resolv.conf to oxi-dns once it's running
     # Back up the current symlink/file
     if [ -L /etc/resolv.conf ]; then
         RESOLV_TARGET=$(readlink -f /etc/resolv.conf 2>/dev/null || true)
         log_verbose "Current /etc/resolv.conf -> $RESOLV_TARGET"
     fi
 
-    # Write a resolv.conf that points to localhost (oxi-hole)
+    # Write a resolv.conf that points to localhost (oxi-dns)
     # Preserve existing search domains if present
     SEARCH_LINE=$(grep '^search ' /etc/resolv.conf 2>/dev/null || true)
     rm -f /etc/resolv.conf
     {
-        echo "# Generated by Oxi-Hole installer"
-        echo "# DNS queries are handled by Oxi-Hole on 127.0.0.1:53"
+        echo "# Generated by Oxi-DNS installer"
+        echo "# DNS queries are handled by Oxi-DNS on 127.0.0.1:53"
         [ -n "$SEARCH_LINE" ] && echo "$SEARCH_LINE"
         echo "nameserver 127.0.0.1"
     } > /etc/resolv.conf
@@ -1043,7 +1043,7 @@ RESOLVEDEOF
     fi
 
     log_info "systemd-resolved stub listener disabled"
-    log_info "/etc/resolv.conf updated to use 127.0.0.1 (Oxi-Hole)"
+    log_info "/etc/resolv.conf updated to use 127.0.0.1 (Oxi-DNS)"
 }
 
 restore_dns() {
@@ -1063,7 +1063,7 @@ restore_dns() {
             log_info "Re-enabling systemd-resolved..."
 
             # Remove our drop-in that disabled the stub listener
-            rm -f /etc/systemd/resolved.conf.d/oxi-hole.conf
+            rm -f /etc/systemd/resolved.conf.d/oxi-dns.conf
             rmdir /etc/systemd/resolved.conf.d 2>/dev/null || true
 
             # Restore resolv.conf to use systemd-resolved stub
@@ -1085,7 +1085,7 @@ restore_dns() {
     log_warn "No system DNS resolver found. Setting up fallback resolv.conf with public DNS servers."
     SEARCH_LINE=$(grep '^search ' /etc/resolv.conf 2>/dev/null || true)
     {
-        echo "# Generated by Oxi-Hole uninstaller (fallback)"
+        echo "# Generated by Oxi-DNS uninstaller (fallback)"
         [ -n "$SEARCH_LINE" ] && echo "$SEARCH_LINE"
         echo "nameserver 1.1.1.1"
         echo "nameserver 9.9.9.9"
@@ -1094,38 +1094,38 @@ restore_dns() {
 }
 
 verify_running() {
-    log_step "Verifying Oxi-Hole is running"
+    log_step "Verifying Oxi-DNS is running"
 
     # Give the service a moment to start and bind
     sleep 2
 
     # Check if the process is running
     if ! pgrep -x "$BINARY_NAME" >/dev/null 2>&1; then
-        log_error "Oxi-Hole process is not running."
+        log_error "Oxi-DNS process is not running."
         detect_init_system
         case "$INIT_SYSTEM" in
             systemd)  log_error "Check logs with: journalctl -u ${SERVICE_NAME} --no-pager -n 20" ;;
-            launchd)  log_error "Check logs with: tail -20 ${LOG_DIR}/oxi-hole.log" ;;
+            launchd)  log_error "Check logs with: tail -20 ${LOG_DIR}/oxi-dns.log" ;;
             *)        log_error "Check logs in: ${LOG_DIR}/" ;;
         esac
         exit 1
     fi
 
-    # Check if port 53 is bound by oxi-hole
+    # Check if port 53 is bound by oxi-dns
     if command -v ss >/dev/null 2>&1; then
         if ! ss -tlnup 2>/dev/null | grep ':53 ' | grep -q "$BINARY_NAME"; then
-            log_warn "Oxi-Hole is running but may not be listening on port 53."
+            log_warn "Oxi-DNS is running but may not be listening on port 53."
             detect_init_system
             case "$INIT_SYSTEM" in
                 systemd)  log_warn "Check logs with: journalctl -u ${SERVICE_NAME} --no-pager -n 20" ;;
-                launchd)  log_warn "Check logs with: tail -20 ${LOG_DIR}/oxi-hole.log" ;;
+                launchd)  log_warn "Check logs with: tail -20 ${LOG_DIR}/oxi-dns.log" ;;
                 *)        log_warn "Check logs in: ${LOG_DIR}/" ;;
             esac
             return 0
         fi
     fi
 
-    log_info "Oxi-Hole is running and listening on port 53"
+    log_info "Oxi-DNS is running and listening on port 53"
 }
 
 # ============================================================================
