@@ -688,6 +688,63 @@
             font-family: var(--font-mono);
         }
 
+        /* ---- Refresh row ---- */
+        .refresh-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-top: 12px;
+            padding-top: 12px;
+            border-top: 1px solid var(--border-light);
+        }
+
+        .refresh-row .last-refreshed {
+            font-size: 13px;
+            color: var(--text-muted);
+            font-family: var(--font-mono);
+        }
+
+        .btn-refresh {
+            padding: 5px 14px;
+            font-size: 12px;
+            font-family: var(--font-mono);
+            background: transparent;
+            border: 1px solid var(--color-accent);
+            color: var(--color-accent);
+            border-radius: 999px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .btn-refresh:hover {
+            background: rgba(138, 100, 229, 0.1);
+        }
+
+        .btn-refresh:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .source-status {
+            font-size: 11px;
+            font-family: var(--font-mono);
+            margin-left: auto;
+            margin-right: 8px;
+            white-space: nowrap;
+        }
+
+        .source-status.ok {
+            color: var(--color-green);
+        }
+
+        .source-status.error {
+            color: var(--color-red);
+        }
+
+        .source-status.loading {
+            color: var(--text-muted);
+        }
+
         /* ---- Blocking Mode ---- */
         .blocking-mode-options {
             display: flex;
@@ -1147,6 +1204,10 @@
                 <ul class="upstream-list" id="activeBlocklists">
                     <li>Loading...</li>
                 </ul>
+                <div class="refresh-row">
+                    <span class="last-refreshed" id="lastRefreshedText">Last refreshed: never</span>
+                    <button class="btn-refresh" id="refreshNowBtn" onclick="triggerRefresh()">&#8635; Refresh Now</button>
+                </div>
                 <div class="interval-row">
                     <div class="interval-label">
                         <span>Auto-refresh interval:</span>
@@ -1226,6 +1287,7 @@
                 refreshQueries();
                 refreshUpstreams();
                 refreshBlocklistSources();
+                loadLastRefreshed();
                 refreshSystemSettings();
                 refreshFeatures();
                 refreshCustomBlocked();
@@ -1543,6 +1605,99 @@
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ interval_minutes })
             });
+        }
+
+        // ---- Blocklist Refresh ----
+        let lastRefreshedTime = null;
+        let refreshTimerInterval = null;
+
+        function formatElapsed(ms) {
+            const totalSec = Math.floor(ms / 1000);
+            const h = String(Math.floor(totalSec / 3600)).padStart(2, '0');
+            const m = String(Math.floor((totalSec % 3600) / 60)).padStart(2, '0');
+            const s = String(totalSec % 60).padStart(2, '0');
+            return h + ':' + m + ':' + s;
+        }
+
+        function updateRefreshTimer() {
+            const el = document.getElementById('lastRefreshedText');
+            if (!lastRefreshedTime) {
+                el.textContent = 'Last refreshed: never';
+                return;
+            }
+            const elapsed = Date.now() - lastRefreshedTime.getTime();
+            el.textContent = 'Last refreshed: ' + formatElapsed(elapsed) + ' ago';
+        }
+
+        function startRefreshTimer() {
+            if (refreshTimerInterval) clearInterval(refreshTimerInterval);
+            updateRefreshTimer();
+            refreshTimerInterval = setInterval(updateRefreshTimer, 1000);
+        }
+
+        async function loadLastRefreshed() {
+            try {
+                const res = await fetch('/api/blocklist-sources/last-refresh');
+                const data = await res.json();
+                if (data.refreshed_at) {
+                    lastRefreshedTime = new Date(data.refreshed_at);
+                }
+            } catch (e) { console.error(e); }
+            startRefreshTimer();
+        }
+
+        function triggerRefresh() {
+            const btn = document.getElementById('refreshNowBtn');
+            btn.disabled = true;
+            btn.textContent = 'Refreshing...';
+
+            // Clear previous status indicators
+            document.querySelectorAll('.source-status').forEach(el => el.remove());
+
+            const evtSource = new EventSource('/api/blocklist-sources/refresh');
+
+            evtSource.addEventListener('progress', function(e) {
+                const data = JSON.parse(e.data);
+                // Find the matching source row in the list
+                const listItems = document.querySelectorAll('#activeBlocklists li');
+                listItems.forEach(li => {
+                    const label = li.querySelector('.upstream-label');
+                    if (label && label.textContent === data.source) {
+                        // Remove any existing status
+                        const existing = li.querySelector('.source-status');
+                        if (existing) existing.remove();
+
+                        const status = document.createElement('span');
+                        status.className = 'source-status';
+                        if (data.status === 'ok') {
+                            status.classList.add('ok');
+                            status.textContent = '\u2713 ' + data.domains.toLocaleString();
+                        } else {
+                            status.classList.add('error');
+                            status.textContent = '\u2717 failed';
+                        }
+                        // Insert before the remove button
+                        const removeBtn = li.querySelector('.btn-remove');
+                        li.insertBefore(status, removeBtn);
+                    }
+                });
+            });
+
+            evtSource.addEventListener('done', function(e) {
+                const data = JSON.parse(e.data);
+                evtSource.close();
+                btn.disabled = false;
+                btn.textContent = '\u21BB Refresh Now';
+                lastRefreshedTime = new Date(data.refreshed_at);
+                updateRefreshTimer();
+                refreshStats();
+            });
+
+            evtSource.onerror = function() {
+                evtSource.close();
+                btn.disabled = false;
+                btn.textContent = '\u21BB Refresh Now';
+            };
         }
 
         async function refreshUpstreams() {
