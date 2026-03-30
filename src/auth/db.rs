@@ -243,7 +243,10 @@ impl AuthDb {
     }
 
     /// Look up a user by id, returning the password hash too.
-    pub async fn get_user_with_hash_by_id(&self, user_id: i64) -> anyhow::Result<Option<UserWithHash>> {
+    pub async fn get_user_with_hash_by_id(
+        &self,
+        user_id: i64,
+    ) -> anyhow::Result<Option<UserWithHash>> {
         let conn = self.conn.clone();
         let result = conn
             .call(move |conn| {

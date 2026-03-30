@@ -309,11 +309,7 @@ async fn api_auth_setup(
     let all_permissions: Vec<Permission> = Permission::ALL.to_vec();
     match state
         .auth
-        .create_user(
-            &req.username,
-            &req.password,
-            &all_permissions,
-        )
+        .create_user(&req.username, &req.password, &all_permissions)
         .await
     {
         Ok(_user) => {
@@ -461,11 +457,7 @@ async fn api_create_user(
 
     match state
         .auth
-        .create_user(
-            &req.username,
-            &req.password,
-            &req.permissions,
-        )
+        .create_user(&req.username, &req.password, &req.permissions)
         .await
     {
         Ok(new_user) => Ok(Json(new_user)),
@@ -519,11 +511,7 @@ async fn api_update_user(
 
     match state
         .auth
-        .update_user(
-            id,
-            req.is_active,
-            req.permissions.as_deref(),
-        )
+        .update_user(id, req.is_active, req.permissions.as_deref())
         .await
     {
         Ok(()) => Ok(StatusCode::OK),
@@ -591,7 +579,11 @@ async fn api_change_password(
     State(state): State<AppState>,
     Json(req): Json<ChangePasswordRequest>,
 ) -> Result<StatusCode, Response> {
-    if !state.auth.verify_password(user.id, &req.current_password).await {
+    if !state
+        .auth
+        .verify_password(user.id, &req.current_password)
+        .await
+    {
         return Err((
             StatusCode::UNAUTHORIZED,
             Json(AuthErrorResponse {
