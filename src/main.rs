@@ -443,6 +443,7 @@ async fn main() -> anyhow::Result<()> {
                                 &update_status,
                                 &config_path_for_update,
                                 &current_exe_path,
+                                &channel,
                             )
                             .await;
                         } else {

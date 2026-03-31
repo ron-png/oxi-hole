@@ -179,6 +179,7 @@ pub async fn perform_robust_update(
     update_status: &Arc<RwLock<UpdateStatus>>,
     config_path: &Path,
     current_exe: &Path,
+    channel: &str,
 ) {
     // === Check ===
     info!("Update: checking for updates...");
@@ -190,7 +191,7 @@ pub async fn perform_robust_update(
         s.last_attempt = Some(std::time::Instant::now());
     }
 
-    let info = update_checker.check(true, "stable").await;
+    let info = update_checker.check(true, channel).await;
     if !info.update_available {
         let mut s = update_status.write().await;
         s.state = UpdateState::Idle;

@@ -1824,12 +1824,14 @@ async fn api_perform_update_inner(state: AppState) -> Result<Json<UpdateResponse
     let update_checker = state.update_checker.clone();
     let update_status = state.update_status.clone();
     let config_path = state.config_path.clone();
+    let channel = state.release_channel.read().await.clone();
     tokio::spawn(async move {
         crate::update::perform_robust_update(
             &update_checker,
             &update_status,
             &config_path,
             &current_exe,
+            &channel,
         )
         .await;
     });
