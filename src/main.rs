@@ -13,6 +13,9 @@ mod stats;
 mod tls;
 mod update;
 mod web;
+mod reconfigure;
+mod cert_parser;
+mod persistent_stats;
 
 use config::Config;
 use std::path::PathBuf;
@@ -27,6 +30,8 @@ async fn main() -> anyhow::Result<()> {
     let mut health_check = false;
     let mut ready_file: Option<PathBuf> = None;
     let mut config_arg: Option<String> = None;
+    let mut reconfigure_args: Vec<String> = Vec::new();
+    let mut is_reconfigure = false;
 
     let mut i = 1;
     while i < args.len() {
@@ -44,8 +49,13 @@ async fn main() -> anyhow::Result<()> {
                         anyhow::anyhow!("--ready-file requires a path")
                     })?));
             }
+            "--reconfigure" => {
+                is_reconfigure = true;
+            }
             other => {
-                if config_arg.is_none() && !other.starts_with('-') {
+                if is_reconfigure && other.contains('=') {
+                    reconfigure_args.push(other.to_string());
+                } else if config_arg.is_none() && !other.starts_with('-') {
                     config_arg = Some(other.to_string());
                 }
             }
@@ -55,7 +65,16 @@ async fn main() -> anyhow::Result<()> {
 
     let config_path = config_arg
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("config.toml"));
+        .unwrap_or_else(|| PathBuf::from("/etc/oxi-dns/config.toml"));
+
+    // Handle --reconfigure before any server initialization
+    if is_reconfigure {
+        if let Err(e) = reconfigure::run(&config_path, &reconfigure_args) {
+            eprintln!("Error: {}", e);
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
 
     rustls::crypto::ring::default_provider()
         .install_default()
@@ -183,8 +202,15 @@ async fn main() -> anyhow::Result<()> {
     let mut feature_manager = features::FeatureManager::new(blocklist_manager.clone());
     feature_manager.set_upstream(upstream.clone());
 
+    // Open persistent stats database
+    let stats_db_path = config_path
+        .parent()
+        .unwrap_or(std::path::Path::new("."))
+        .join("stats.db");
+    let persistent_stats = persistent_stats::PersistentStats::open(&stats_db_path).await?;
+
     // Initialize stats
-    let stats = stats::Stats::new(10_000);
+    let stats = stats::Stats::new(10_000, Some(persistent_stats.clone()));
 
     // Shared blocking mode (so web UI can change it at runtime)
     let blocking_mode = std::sync::Arc::new(tokio::sync::RwLock::new(
@@ -210,9 +236,12 @@ async fn main() -> anyhow::Result<()> {
         config.log.anonymize_client_ip,
     ));
     let log_retention_days =
-        std::sync::Arc::new(tokio::sync::RwLock::new(config.log.retention_days));
+        std::sync::Arc::new(tokio::sync::RwLock::new(config.log.query_log_retention_days));
     let ipv6_enabled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(
         config.system.ipv6_enabled,
+    ));
+    let stats_retention_days = std::sync::Arc::new(tokio::sync::RwLock::new(
+        config.log.stats_retention_days,
     ));
 
     // Start DNS server (all protocols)
@@ -275,6 +304,14 @@ async fn main() -> anyhow::Result<()> {
         config.blocking.update_interval_minutes,
     ));
 
+    // Graceful restart signal (for web API to trigger zero-downtime restart)
+    let (restart_tx, mut restart_rx) = tokio::sync::watch::channel(false);
+
+    let release_channel = std::sync::Arc::new(tokio::sync::RwLock::new(
+        config.system.release_channel.clone(),
+    ));
+    let (update_check_tx, mut update_check_rx) = tokio::sync::watch::channel(false);
+
     // Construct web_state early so background tasks can clone from it
     let web_state = web::AppState {
         blocklist: blocklist_manager,
@@ -294,7 +331,13 @@ async fn main() -> anyhow::Result<()> {
         anonymize_ip,
         ipv6_enabled,
         auth: auth_service,
-        login_rate_limiter: web::LoginRateLimiter::new(),
+        auth_rate_limiter: web::RateLimiter::new(5, 60),
+        admin_rate_limiter: web::RateLimiter::new(20, 60),
+        restart_signal: restart_tx,
+        release_channel: release_channel.clone(),
+        update_check_signal: update_check_tx,
+        persistent_stats: persistent_stats.clone(),
+        stats_retention_days: stats_retention_days.clone(),
     };
 
     // Spawn background blocklist refresh task
@@ -337,6 +380,36 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
+    // Spawn stats flush task (every 60 seconds)
+    {
+        let ps = persistent_stats.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+            interval.tick().await;
+            loop {
+                interval.tick().await;
+                if let Err(e) = ps.flush().await {
+                    tracing::warn!("Stats flush failed: {}", e);
+                }
+            }
+        });
+    }
+
+    // Spawn stats purge task (hourly)
+    {
+        let ps = persistent_stats.clone();
+        let retention = stats_retention_days.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
+                let days = *retention.read().await;
+                if let Err(e) = ps.purge_older_than(days).await {
+                    tracing::warn!("Stats purge failed: {}", e);
+                }
+            }
+        });
+    }
+
     // Spawn background auto-update task
     {
         let auto_update_flag = web_state.auto_update.clone();
@@ -344,11 +417,12 @@ async fn main() -> anyhow::Result<()> {
         let update_status = web_state.update_status.clone();
         let current_exe = std::env::current_exe().ok();
         let config_path_for_update = config_path.clone();
+        let channel_lock = release_channel.clone();
 
         tokio::spawn(async move {
             loop {
-                // Always check for updates regardless of auto_update setting
-                let version_info = update_checker.check(true).await;
+                let channel = channel_lock.read().await.clone();
+                let version_info = update_checker.check(true, &channel).await;
 
                 if version_info.update_available {
                     if let Some(ref latest) = version_info.latest_version {
@@ -382,7 +456,13 @@ async fn main() -> anyhow::Result<()> {
                     }
                 }
 
-                tokio::time::sleep(crate::update::CHECK_INTERVAL).await;
+                // Wait for either the check interval OR an immediate check signal
+                tokio::select! {
+                    _ = tokio::time::sleep(crate::update::CHECK_INTERVAL) => {}
+                    _ = update_check_rx.changed() => {
+                        info!("Immediate update check triggered by channel change");
+                    }
+                }
             }
         });
     }
@@ -403,6 +483,69 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
+    // Spawn graceful restart watcher (triggered by web API for config changes)
+    {
+        let config_path_for_restart = config_path.clone();
+        tokio::spawn(async move {
+            loop {
+                restart_rx.changed().await.ok();
+                if !*restart_rx.borrow() {
+                    continue;
+                }
+
+                info!("Graceful restart triggered by web API");
+                let current_exe = match std::env::current_exe() {
+                    Ok(p) => p,
+                    Err(e) => {
+                        tracing::error!("Cannot determine binary path for restart: {}", e);
+                        continue;
+                    }
+                };
+
+                let ready_path = std::env::temp_dir().join("oxi-dns-restart.ready");
+                let _ = std::fs::remove_file(&ready_path);
+
+                let mut child = match tokio::process::Command::new(&current_exe)
+                    .arg("--takeover")
+                    .arg("--ready-file")
+                    .arg(ready_path.to_str().unwrap())
+                    .arg(config_path_for_restart.to_str().unwrap_or("/etc/oxi-dns/config.toml"))
+                    .spawn()
+                {
+                    Ok(c) => c,
+                    Err(e) => {
+                        tracing::error!("Failed to spawn restart process: {}", e);
+                        continue;
+                    }
+                };
+
+                let mut ready = false;
+                for _ in 0..120 {
+                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                    match child.try_wait() {
+                        Ok(Some(_)) => break,
+                        Ok(None) => {}
+                        Err(_) => break,
+                    }
+                    if ready_path.exists() {
+                        ready = true;
+                        break;
+                    }
+                }
+
+                if ready {
+                    info!("New process ready — shutting down for graceful restart");
+                    let _ = std::fs::remove_file(&ready_path);
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                    std::process::exit(0);
+                } else {
+                    tracing::error!("Restart: new process failed to become ready within 60s");
+                    let _ = child.kill().await;
+                }
+            }
+        });
+    }
+
     // Restore enabled features from config
     for feature_id in &config.blocking.enabled_features {
         info!("Restoring feature: {}", feature_id);
@@ -410,8 +553,32 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let web_listen = config.web.listen.clone();
+    let web_https_listen = config.web.https_listen.clone();
+
+    let web_tls_config = if config.tls.cert_path.is_some()
+        && config.tls.key_path.is_some()
+        && web_https_listen.is_some()
+    {
+        match tls::build_server_config(&config.tls, vec![b"h2".to_vec(), b"http/1.1".to_vec()]) {
+            Ok(cfg) => Some(cfg),
+            Err(e) => {
+                tracing::warn!("Failed to build web TLS config: {}. HTTPS disabled.", e);
+                None
+            }
+        }
+    } else {
+        None
+    };
+
     let web_handle = tokio::spawn(async move {
-        if let Err(e) = web::run_web_server(&web_listen, web_state).await {
+        if let Err(e) = web::run_web_server(
+            &web_listen,
+            web_https_listen.as_deref(),
+            web_tls_config,
+            web_state,
+        )
+        .await
+        {
             tracing::error!("Web server error: {}", e);
         }
     });

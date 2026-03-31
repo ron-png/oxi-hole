@@ -1,3 +1,4 @@
+use crate::persistent_stats::PersistentStats;
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use std::collections::VecDeque;
@@ -24,15 +25,17 @@ pub struct Stats {
     blocked_queries: Arc<AtomicU64>,
     query_log: Arc<RwLock<VecDeque<QueryLogEntry>>>,
     max_log_entries: usize,
+    persistent: Option<PersistentStats>,
 }
 
 impl Stats {
-    pub fn new(max_log_entries: usize) -> Self {
+    pub fn new(max_log_entries: usize, persistent: Option<PersistentStats>) -> Self {
         Self {
             total_queries: Arc::new(AtomicU64::new(0)),
             blocked_queries: Arc::new(AtomicU64::new(0)),
             query_log: Arc::new(RwLock::new(VecDeque::with_capacity(max_log_entries))),
             max_log_entries,
+            persistent,
         }
     }
 
@@ -40,6 +43,11 @@ impl Stats {
         self.total_queries.fetch_add(1, Ordering::Relaxed);
         if entry.blocked {
             self.blocked_queries.fetch_add(1, Ordering::Relaxed);
+        }
+
+        // Record to persistent stats
+        if let Some(ref ps) = self.persistent {
+            ps.record(&entry.domain, entry.blocked);
         }
 
         let log = self.query_log.clone();

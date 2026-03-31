@@ -5,32 +5,32 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Oxi-DNS Dashboard</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500&family=JetBrains+Mono:wght@300;400;500;600&display=swap" rel="stylesheet">
     <style>
-        @property --gradient-angle {
-            syntax: "<angle>";
-            initial-value: 0deg;
-            inherits: false;
-        }
-
         :root {
-            --color-accent: #8a64e5;
-            --color-accent-hover: #9d7cf2;
-            --color-slate: #6d98cc;
-            --color-indigo: #2a1373;
+            --accent: #00d4aa;
+            --accent-hover: #00eabc;
+            --accent-dim: rgba(0, 212, 170, 0.12);
+            --accent-glow: rgba(0, 212, 170, 0.25);
+            --color-accent: #00d4aa;
+            --color-accent-hover: #00eabc;
             --color-green: #34d399;
-            --color-red: #f87171;
-            --color-orange: #fb923c;
-            --text-primary: #e6e6e6;
-            --text-secondary: #999;
-            --text-muted: #666;
-            --bg-page: #000;
-            --bg-subtle: #111;
-            --border: #222;
-            --border-light: #1a1a1a;
-            --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-            --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", monospace;
+            --color-red: #ef6461;
+            --color-orange: #e5a835;
+            --color-slate: #6d98cc;
+            --text-primary: #eaeaea;
+            --text-secondary: #8a8f98;
+            --text-muted: #505560;
+            --bg-page: #0a0a0c;
+            --bg-subtle: #101014;
+            --border: #1e1e24;
+            --border-light: #16161b;
+            --font-sans: 'DM Sans', sans-serif;
+            --font-mono: 'JetBrains Mono', monospace;
             --weight-light: 300;
-            --weight-normal: 420;
+            --weight-normal: 400;
             --weight-medium: 500;
             --weight-bold: 600;
         }
@@ -59,8 +59,140 @@
         }
 
         ::selection {
-            background: var(--color-accent);
-            color: #fff;
+            background: var(--accent);
+            color: var(--bg-page);
+        }
+
+        /* ---- Custom Form Elements ---- */
+
+        input[type="checkbox"]:not(.toggle-switch input) {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 16px;
+            height: 16px;
+            border: 1.5px solid var(--border);
+            border-radius: 4px;
+            background: var(--bg-page);
+            cursor: pointer;
+            position: relative;
+            flex-shrink: 0;
+            transition: border-color 0.15s, background 0.15s;
+        }
+
+        input[type="checkbox"]:not(.toggle-switch input):hover {
+            border-color: var(--accent);
+        }
+
+        input[type="checkbox"]:not(.toggle-switch input):checked {
+            background: var(--accent);
+            border-color: var(--accent);
+        }
+
+        input[type="checkbox"]:not(.toggle-switch input):checked::after {
+            content: '';
+            position: absolute;
+            left: 4.5px;
+            top: 1.5px;
+            width: 5px;
+            height: 9px;
+            border: solid var(--bg-page);
+            border-width: 0 2px 2px 0;
+            transform: rotate(45deg);
+        }
+
+        input[type="checkbox"]:not(.toggle-switch input):disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+        }
+
+        .logs-controls input[type="text"],
+        .logs-controls select {
+            background: var(--bg-page);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 8px 12px;
+            color: var(--text-primary);
+            font-family: var(--font-sans);
+            font-size: 13px;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+
+        .logs-controls input[type="text"]:focus,
+        .logs-controls select:focus {
+            border-color: var(--accent);
+        }
+
+        .logs-controls input[type="text"]::placeholder {
+            color: var(--text-muted);
+        }
+
+        input[type="file"] {
+            color: var(--text-muted);
+            font-family: var(--font-sans);
+            font-size: 12px;
+        }
+
+        input[type="file"]::file-selector-button {
+            background: var(--bg-page);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 6px 14px;
+            color: var(--text-secondary);
+            font-family: var(--font-mono);
+            font-size: 12px;
+            cursor: pointer;
+            transition: border-color 0.15s, color 0.15s;
+            margin-right: 10px;
+        }
+
+        input[type="file"]::file-selector-button:hover {
+            border-color: var(--accent);
+            color: var(--text-primary);
+        }
+
+        select {
+            background: var(--bg-page);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 6px 28px 6px 10px;
+            color: var(--text-primary);
+            font-family: var(--font-sans);
+            font-size: 13px;
+            outline: none;
+            cursor: pointer;
+            -webkit-appearance: none;
+            appearance: none;
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='M3 5l3 3 3-3' stroke='%23505560' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
+            background-repeat: no-repeat;
+            background-position: right 8px center;
+            transition: border-color 0.15s;
+        }
+
+        select:focus {
+            border-color: var(--accent);
+        }
+
+        select option {
+            background: var(--bg-subtle);
+            color: var(--text-primary);
+        }
+
+        input[type="number"] {
+            -moz-appearance: textfield;
+        }
+
+        input[type="number"]::-webkit-inner-spin-button,
+        input[type="number"]::-webkit-outer-spin-button {
+            -webkit-appearance: none;
+            margin: 0;
+        }
+
+        input:focus-visible,
+        select:focus-visible {
+            outline: none;
+            border-color: var(--accent);
+            box-shadow: 0 0 0 2px var(--accent-dim);
         }
 
         /* ---- Header ---- */
@@ -70,7 +202,7 @@
             z-index: 100;
             border-bottom: 1px solid var(--border);
             padding: 16px 0;
-            background: rgba(0, 0, 0, 0.85);
+            background: rgba(10, 10, 12, 0.85);
             backdrop-filter: blur(12px);
             -webkit-backdrop-filter: blur(12px);
         }
@@ -94,7 +226,8 @@
         }
 
         .header h1 span {
-            color: var(--color-accent);
+            color: var(--accent);
+            text-shadow: 0 0 20px var(--accent-glow);
         }
 
         .header-right {
@@ -134,22 +267,18 @@
             font-family: var(--font-mono);
             font-size: 12px;
             padding: 6px 18px;
-            border: 2px solid transparent;
+            border: 2px solid var(--border);
             border-radius: 999px;
             cursor: pointer;
             font-weight: var(--weight-medium);
             transition: all 0.3s;
-            background:
-                linear-gradient(var(--bg-page), var(--bg-page)) padding-box,
-                linear-gradient(var(--text-muted), var(--text-muted)) border-box;
+            background: var(--bg-page);
             color: var(--text-primary);
         }
 
         .master-toggle:hover {
-            background:
-                linear-gradient(var(--bg-page), var(--bg-page)) padding-box,
-                conic-gradient(from var(--gradient-angle), #8a64e5, #6d98cc, #2a1373, #8a64e5) border-box;
-            animation: spin-border 3s linear infinite;
+            box-shadow: 0 0 16px var(--accent-glow);
+            border-color: var(--accent);
         }
 
         .master-toggle.enabled {
@@ -158,12 +287,6 @@
 
         .master-toggle.disabled {
             color: var(--color-red);
-        }
-
-        @keyframes spin-border {
-            to {
-                --gradient-angle: 360deg;
-            }
         }
 
         /* ---- Container ---- */
@@ -185,7 +308,7 @@
         .stat-card {
             background: var(--bg-subtle);
             border: 1px solid var(--border);
-            border-radius: 6px;
+            border-radius: 10px;
             padding: 20px;
         }
 
@@ -210,7 +333,7 @@
             position: absolute;
             left: 0;
             top: calc(100% + 6px);
-            background: #1a1a1a;
+            background: var(--border-light);
             border: 1px solid var(--border);
             border-radius: 6px;
             padding: 8px 10px;
@@ -255,7 +378,7 @@
         .feature-card {
             background: var(--bg-subtle);
             border: 1px solid var(--border);
-            border-radius: 6px;
+            border-radius: 10px;
             padding: 20px;
             display: flex;
             align-items: center;
@@ -276,8 +399,8 @@
             justify-content: center;
             font-size: 1.2rem;
             flex-shrink: 0;
-            background: rgba(138, 100, 229, 0.1);
-            color: var(--color-accent);
+            background: var(--accent-dim);
+            color: var(--accent);
         }
 
         .feature-icon.shield {
@@ -286,8 +409,8 @@
         }
 
         .feature-icon.eye-off {
-            background: rgba(138, 100, 229, 0.1);
-            color: var(--color-accent);
+            background: var(--accent-dim);
+            color: var(--accent);
         }
 
         .feature-icon.search {
@@ -356,7 +479,7 @@
             left: 0;
             right: 0;
             bottom: 0;
-            background: #333;
+            background: var(--border);
             border-radius: 24px;
             transition: 0.3s;
         }
@@ -374,7 +497,7 @@
         }
 
         .toggle-switch input:checked+.toggle-slider {
-            background: var(--color-accent);
+            background: var(--accent);
         }
 
         .toggle-switch input:checked+.toggle-slider:before {
@@ -389,7 +512,7 @@
         .section {
             background: var(--bg-subtle);
             border: 1px solid var(--border);
-            border-radius: 6px;
+            border-radius: 10px;
             padding: 24px;
             margin-bottom: 16px;
         }
@@ -438,34 +561,29 @@
             font-weight: var(--weight-normal);
             padding: 8px 18px;
             color: var(--text-primary);
-            border: 2px solid transparent;
+            border: 2px solid var(--border);
             border-radius: 999px;
             cursor: pointer;
-            background:
-                linear-gradient(var(--bg-page), var(--bg-page)) padding-box,
-                linear-gradient(var(--text-muted), var(--text-muted)) border-box;
-            transition: color 0.3s;
+            background: var(--bg-page);
+            transition: color 0.3s, box-shadow 0.3s, border-color 0.3s;
             text-decoration: none;
         }
 
         .btn:hover {
             color: var(--text-primary);
-            background:
-                linear-gradient(var(--bg-page), var(--bg-page)) padding-box,
-                conic-gradient(from var(--gradient-angle), #8a64e5, #6d98cc, #2a1373, #8a64e5) border-box;
-            animation: spin-border 3s linear infinite;
+            border-color: var(--accent);
+            box-shadow: 0 0 12px var(--accent-glow);
         }
 
         .btn-accent {
-            background:
-                linear-gradient(var(--bg-subtle), var(--bg-subtle)) padding-box,
-                linear-gradient(var(--color-accent), var(--color-accent-hover)) border-box;
+            background: var(--accent);
+            border-color: var(--accent);
+            color: var(--bg-page);
         }
 
         .btn-danger {
-            background:
-                linear-gradient(var(--bg-page), var(--bg-page)) padding-box,
-                linear-gradient(var(--color-red), #ef4444) border-box;
+            background: var(--bg-page);
+            border-color: var(--color-red);
             color: var(--color-red);
         }
 
@@ -474,9 +592,8 @@
         }
 
         .btn-green {
-            background:
-                linear-gradient(var(--bg-page), var(--bg-page)) padding-box,
-                linear-gradient(var(--color-green), #22c55e) border-box;
+            background: var(--bg-page);
+            border-color: var(--color-green);
             color: var(--color-green);
         }
 
@@ -512,7 +629,7 @@
         }
 
         tr:hover {
-            background: rgba(138, 100, 229, 0.03);
+            background: rgba(0, 212, 170, 0.03);
         }
 
         .badge {
@@ -535,8 +652,8 @@
         }
 
         .badge.rewrite {
-            background: rgba(138, 100, 229, 0.1);
-            color: var(--color-accent);
+            background: var(--accent-dim);
+            color: var(--accent);
         }
 
         #query-log {
@@ -744,7 +861,7 @@
         }
 
         .btn-refresh:hover {
-            background: rgba(138, 100, 229, 0.1);
+            background: var(--accent-dim);
         }
 
         .btn-refresh:disabled {
@@ -910,6 +1027,83 @@
             white-space: nowrap;
         }
 
+        .network-settings { margin-bottom: 24px; }
+        .network-settings h3 { font-size: 15px; margin-bottom: 12px; color: var(--text-primary); }
+        .network-field { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
+        .network-field label { width: 140px; font-size: 13px; color: var(--text-secondary); flex-shrink: 0; }
+        .network-field input {
+            flex: 1; background: var(--bg-page); border: 1px solid var(--border); border-radius: 6px;
+            padding: 7px 10px; font-size: 13px; font-family: var(--font-mono, monospace);
+            color: var(--text-primary); outline: none; transition: border-color 0.15s;
+        }
+        .network-field input:focus { border-color: var(--accent); }
+        .network-field input::placeholder { color: var(--text-muted); font-family: var(--font-sans); font-style: italic; }
+        .network-field .proto-toggle { display: flex; align-items: center; gap: 8px; }
+        .network-field .proto-toggle label.toggle-switch { flex-shrink: 0; }
+        .network-field .proto-toggle input[type="text"] { flex: 1; }
+        .network-field .proto-toggle input[type="text"]:disabled {
+            opacity: 0.4; cursor: not-allowed;
+        }
+
+        .reconfig-banner {
+            margin-top: 16px; padding: 14px 16px;
+            background: rgba(234, 179, 8, 0.06); border: 1px solid rgba(234, 179, 8, 0.2);
+            border-radius: 8px; display: none;
+        }
+        .reconfig-banner.visible { display: block; }
+        .reconfig-banner .banner-title { font-size: 13px; font-weight: 600; color: #eab308; margin-bottom: 8px; }
+        .reconfig-banner .banner-desc { font-size: 12px; color: var(--text-secondary); margin-bottom: 10px; }
+        .reconfig-banner .banner-cmd {
+            background: var(--bg-page); border: 1px solid var(--border); border-radius: 6px;
+            padding: 10px 12px; font-family: var(--font-mono, monospace); font-size: 13px;
+            color: var(--text-primary); word-break: break-all; margin-bottom: 10px;
+        }
+        .reconfig-banner .banner-actions { display: flex; gap: 8px; justify-content: flex-end; }
+        .reconfig-banner .banner-actions button {
+            padding: 5px 12px; border-radius: 6px; font-size: 12px; cursor: pointer; border: none;
+        }
+        .reconfig-btn-copy { background: #eab308; color: #000; font-weight: 500; }
+        .reconfig-btn-copy:hover { background: #facc15; }
+        .reconfig-btn-dismiss { background: transparent; color: var(--text-muted); border: 1px solid var(--border) !important; }
+        .reconfig-btn-dismiss:hover { color: var(--text-secondary); }
+        .channel-warning {
+            margin-top: 10px; padding: 10px 14px;
+            background: rgba(234, 179, 8, 0.06); border: 1px solid rgba(234, 179, 8, 0.2);
+            border-radius: 8px; font-size: 12px; color: #eab308; line-height: 1.5; display: none;
+        }
+        .channel-warning.visible { display: block; }
+        /* .channel-select styling now handled by global select rules */
+
+        .tls-section { margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--border); }
+        .tls-section h3 { font-size: 15px; margin-bottom: 12px; color: var(--text-primary); }
+        .tls-status { padding: 12px 14px; background: var(--bg-page); border-radius: 8px; margin-bottom: 12px; }
+        .tls-status .tls-label { font-size: 12px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; }
+        .tls-status .tls-value { font-size: 14px; color: var(--text-primary); margin-top: 2px; }
+        .tls-status-row { display: flex; gap: 16px; flex-wrap: wrap; }
+        .tls-status-item { flex: 1; min-width: 120px; }
+        .tls-upload { margin-top: 12px; }
+        .tls-tabs { display: flex; gap: 4px; margin-bottom: 12px; }
+        .tls-tab {
+            padding: 6px 14px; border-radius: 6px; font-size: 12px; cursor: pointer;
+            border: 1px solid var(--border); background: transparent; color: var(--text-muted);
+        }
+        .tls-tab.active { border-color: var(--accent); color: var(--accent); background: var(--accent-dim); }
+        .tls-file-input { margin-bottom: 8px; }
+        .tls-file-input label { font-size: 12px; color: var(--text-secondary); display: block; margin-bottom: 4px; }
+        .tls-file-input input[type="file"] { font-size: 13px; color: var(--text-secondary); }
+        .tls-password { margin-bottom: 10px; display: none; }
+        .tls-password.visible { display: block; }
+        .tls-password input {
+            width: 100%; background: var(--bg-page); border: 1px solid var(--border); border-radius: 6px;
+            padding: 7px 10px; font-size: 13px; color: var(--text-primary); outline: none;
+        }
+        .tls-password input:focus { border-color: var(--accent); }
+        .tls-actions { display: flex; gap: 8px; margin-top: 10px; }
+        .tls-msg { margin-top: 10px; font-size: 13px; padding: 8px 12px; border-radius: 6px; display: none; }
+        .tls-msg.visible { display: block; }
+        .tls-msg.success { background: rgba(34,197,94,0.08); color: #22c55e; border: 1px solid rgba(34,197,94,0.2); }
+        .tls-msg.error { background: rgba(248,113,113,0.08); color: #f87171; border: 1px solid rgba(248,113,113,0.25); }
+
         .logs-settings {
             display: flex;
             gap: 24px;
@@ -1005,8 +1199,8 @@
             top: calc(100% + 6px);
             right: 0;
             min-width: 180px;
-            background: #111;
-            border: 1px solid #222;
+            background: var(--bg-subtle);
+            border: 1px solid var(--border);
             border-radius: 8px;
             overflow: hidden;
             z-index: 200;
@@ -1032,7 +1226,7 @@
         }
 
         .user-menu-item:hover {
-            background: rgba(138, 100, 229, 0.1);
+            background: var(--accent-dim);
             color: var(--text-primary);
         }
 
@@ -1142,9 +1336,6 @@
             cursor: pointer;
         }
 
-        .modal .perm-checkboxes input[type="checkbox"] {
-            accent-color: var(--color-accent);
-        }
 
         .modal-actions {
             display: flex;
@@ -1201,13 +1392,32 @@
             border-radius: 999px;
             font-size: 10px;
             font-family: var(--font-mono);
-            background: rgba(138, 100, 229, 0.1);
-            color: var(--color-accent);
+            background: var(--accent-dim);
+            color: var(--accent);
         }
 
         .user-actions, .token-actions {
             display: flex;
             gap: 4px;
+        }
+
+        /* ---- Scrollbar ---- */
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: var(--bg-page);
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: var(--border);
+            border-radius: 3px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: var(--text-muted);
         }
     </style>
 </head>
@@ -1324,8 +1534,13 @@
 
                 <div class="logs-settings">
                     <label>
-                        Retention:
-                        <input type="number" id="logRetentionInput" min="1" max="90" value="90">
+                        Query log retention:
+                        <input type="number" id="logRetentionInput" min="1" max="90" value="7">
+                        days
+                    </label>
+                    <label>
+                        Statistics retention:
+                        <input type="number" id="statsRetentionInput" min="1" max="365" value="90">
                         days
                     </label>
                     <button class="btn btn-sm" onclick="saveLogSettings()">Save</button>
@@ -1372,6 +1587,98 @@
         <div id="panelAdvanced" class="panel">
             <div class="section">
                 <h2>System Settings</h2>
+                <div class="network-settings manage-system-only">
+                    <h3>Network</h3>
+                    <div class="network-field">
+                        <label>DNS Server</label>
+                        <input type="text" id="net-dns" placeholder="0.0.0.0:53" oninput="checkNetworkChanges()">
+                    </div>
+                    <div class="network-field">
+                        <label>Web Dashboard</label>
+                        <input type="text" id="net-web" placeholder="0.0.0.0:9853" oninput="checkNetworkChanges()">
+                    </div>
+                    <div class="network-field">
+                        <label>DNS-over-TLS</label>
+                        <div class="proto-toggle">
+                            <label class="toggle-switch"><input type="checkbox" id="toggle-dot" onchange="toggleProtocol('dot', this.checked)"><span class="toggle-slider"></span></label>
+                            <input type="text" id="net-dot" placeholder="0.0.0.0:853" disabled>
+                        </div>
+                    </div>
+                    <div class="network-field">
+                        <label>DNS-over-HTTPS</label>
+                        <div class="proto-toggle">
+                            <label class="toggle-switch"><input type="checkbox" id="toggle-doh" onchange="toggleProtocol('doh', this.checked)"><span class="toggle-slider"></span></label>
+                            <input type="text" id="net-doh" placeholder="0.0.0.0:443" disabled>
+                        </div>
+                    </div>
+                    <div class="network-field">
+                        <label>DNS-over-QUIC</label>
+                        <div class="proto-toggle">
+                            <label class="toggle-switch"><input type="checkbox" id="toggle-doq" onchange="toggleProtocol('doq', this.checked)"><span class="toggle-slider"></span></label>
+                            <input type="text" id="net-doq" placeholder="0.0.0.0:853" disabled>
+                        </div>
+                    </div>
+                    <div class="reconfig-banner" id="reconfigBanner">
+                        <div class="banner-title">&#9888; System command required</div>
+                        <div class="banner-desc">This change requires root privileges. Run this command in your terminal:</div>
+                        <div class="banner-cmd" id="reconfigCmd"></div>
+                        <div class="banner-desc">The service will restart automatically.</div>
+                        <div class="banner-actions">
+                            <button class="reconfig-btn-dismiss" onclick="dismissBanner()">Dismiss</button>
+                            <button class="reconfig-btn-copy" onclick="copyReconfigCmd()">Copy</button>
+                        </div>
+                    </div>
+                </div>
+                <div class="tls-section manage-system-only">
+                    <h3>TLS Certificate</h3>
+                    <div class="tls-status" id="tlsStatus">
+                        <div class="tls-status-row">
+                            <div class="tls-status-item">
+                                <div class="tls-label">Status</div>
+                                <div class="tls-value" id="tlsCertType">Loading...</div>
+                            </div>
+                            <div class="tls-status-item">
+                                <div class="tls-label">Subject</div>
+                                <div class="tls-value" id="tlsSubject">&mdash;</div>
+                            </div>
+                            <div class="tls-status-item">
+                                <div class="tls-label">Expires</div>
+                                <div class="tls-value" id="tlsExpiry">&mdash;</div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="tls-upload">
+                        <div class="tls-tabs">
+                            <button class="tls-tab active" onclick="switchTlsTab('pem')">PEM</button>
+                            <button class="tls-tab" onclick="switchTlsTab('p12')">PKCS12</button>
+                        </div>
+                        <div id="tls-pem-fields">
+                            <div class="tls-file-input">
+                                <label>Certificate file (chain)</label>
+                                <input type="file" id="tlsCertFile" accept=".pem,.crt,.cer">
+                            </div>
+                            <div class="tls-file-input">
+                                <label>Private key file (optional if in cert file)</label>
+                                <input type="file" id="tlsKeyFile" accept=".pem,.key">
+                            </div>
+                        </div>
+                        <div id="tls-p12-fields" style="display:none;">
+                            <div class="tls-file-input">
+                                <label>PKCS12 file (.pfx / .p12)</label>
+                                <input type="file" id="tlsP12File" accept=".pfx,.p12">
+                            </div>
+                        </div>
+                        <div class="tls-password" id="tlsPasswordField">
+                            <label style="font-size:12px;color:var(--text-secondary);display:block;margin-bottom:4px;">Password</label>
+                            <input type="password" id="tlsPassword" placeholder="Certificate password">
+                        </div>
+                        <div class="tls-actions">
+                            <button class="btn btn-sm" onclick="uploadTlsCert()">Upload</button>
+                            <button class="btn btn-sm" id="tlsRemoveBtn" onclick="removeTlsCert()" style="display:none;">Remove &amp; use self-signed</button>
+                        </div>
+                        <div class="tls-msg" id="tlsMsg"></div>
+                    </div>
+                </div>
                 <div class="setting-row">
                     <div class="setting-info">
                         <h3>Auto-Update Server</h3>
@@ -1383,6 +1690,21 @@
                         <input type="checkbox" id="autoUpdateCheckbox" onchange="toggleAutoUpdate(this.checked)">
                         <span class="toggle-slider"></span>
                     </label>
+                </div>
+                <div class="setting-row manage-system-only">
+                    <div class="setting-info">
+                        <h3>Release Channel</h3>
+                        <p>Choose which release channel to receive updates from.</p>
+                        <div class="channel-warning" id="channelWarning">
+                            &#9888; Development channel is not recommended for production use.
+                            You will receive untested pre-release builds that may contain bugs or breaking changes.
+                            Only use this for development or testing purposes.
+                        </div>
+                    </div>
+                    <select class="channel-select" id="releaseChannelSelect" onchange="setReleaseChannel(this.value)">
+                        <option value="stable">Stable</option>
+                        <option value="development">Development</option>
+                    </select>
                 </div>
                 <div class="setting-row">
                     <div class="setting-info">
@@ -2097,7 +2419,10 @@
                 refreshUpstreams();
                 refreshBlocklistSources();
                 loadLastRefreshed();
+                refreshNetworkSettings();
+                refreshTlsStatus();
                 refreshSystemSettings();
+                refreshReleaseChannel();
                 refreshFeatures();
                 refreshCustomBlocked();
                 refreshAllowlist();
@@ -2581,6 +2906,245 @@
             refreshUpstreams();
         }
 
+        // ---- TLS Certificate ----
+        let currentTlsTab = 'pem';
+
+        function switchTlsTab(tab) {
+            currentTlsTab = tab;
+            document.querySelectorAll('.tls-tab').forEach(t => t.classList.remove('active'));
+            event.target.classList.add('active');
+            document.getElementById('tls-pem-fields').style.display = tab === 'pem' ? '' : 'none';
+            document.getElementById('tls-p12-fields').style.display = tab === 'p12' ? '' : 'none';
+        }
+
+        async function refreshTlsStatus() {
+            try {
+                const res = await fetch('/api/system/tls');
+                if (!res.ok) return;
+                const data = await res.json();
+                document.getElementById('tlsCertType').textContent = data.self_signed ? 'Self-signed' : 'Custom';
+                document.getElementById('tlsSubject').textContent = data.subject || '\u2014';
+                document.getElementById('tlsExpiry').textContent = data.not_after || '\u2014';
+                document.getElementById('tlsRemoveBtn').style.display = data.self_signed ? 'none' : '';
+            } catch (_) {}
+        }
+
+        function showTlsMsg(msg, type) {
+            const el = document.getElementById('tlsMsg');
+            el.textContent = msg;
+            el.className = 'tls-msg visible ' + type;
+            setTimeout(() => { el.classList.remove('visible'); }, 5000);
+        }
+
+        async function uploadTlsCert() {
+            const form = new FormData();
+            const password = document.getElementById('tlsPassword').value;
+
+            if (currentTlsTab === 'p12') {
+                const file = document.getElementById('tlsP12File').files[0];
+                if (!file) { showTlsMsg('Please select a PKCS12 file.', 'error'); return; }
+                form.append('p12_file', file);
+            } else {
+                const certFile = document.getElementById('tlsCertFile').files[0];
+                if (!certFile) { showTlsMsg('Please select a certificate file.', 'error'); return; }
+                form.append('cert_file', certFile);
+                const keyFile = document.getElementById('tlsKeyFile').files[0];
+                if (keyFile) form.append('key_file', keyFile);
+            }
+            if (password) form.append('password', password);
+
+            try {
+                const res = await fetch('/api/system/tls/upload', { method: 'POST', body: form });
+                const data = await res.json();
+
+                if (res.status === 422 && data.error === 'password_required') {
+                    document.getElementById('tlsPasswordField').classList.add('visible');
+                    showTlsMsg('This file is password-protected. Enter the password and try again.', 'error');
+                    return;
+                }
+
+                if (!res.ok) {
+                    showTlsMsg(data.error || 'Upload failed.', 'error');
+                    return;
+                }
+
+                showTlsMsg('Certificate uploaded. Service restarting...', 'success');
+                document.getElementById('tlsPasswordField').classList.remove('visible');
+                document.getElementById('tlsPassword').value = '';
+                setTimeout(refreshTlsStatus, 3000);
+            } catch (_) {
+                showTlsMsg('Upload failed. Check your connection.', 'error');
+            }
+        }
+
+        async function removeTlsCert() {
+            try {
+                const res = await fetch('/api/system/tls/remove', { method: 'POST' });
+                if (res.ok) {
+                    showTlsMsg('Reverted to self-signed certificate. Service restarting...', 'success');
+                    setTimeout(refreshTlsStatus, 3000);
+                }
+            } catch (_) {
+                showTlsMsg('Failed to remove certificate.', 'error');
+            }
+        }
+
+        // ---- Network Settings ----
+        let serverNetworkState = {};
+        let networkPollTimer = null;
+        let bannerDismissed = false;
+        const PROTO_DEFAULTS = { dot: '0.0.0.0:853', doh: '0.0.0.0:443', doq: '0.0.0.0:853' };
+
+        async function refreshNetworkSettings() {
+            try {
+                const res = await fetch('/api/system/network');
+                if (!res.ok) return;
+                serverNetworkState = await res.json();
+                document.getElementById('net-dns').value = (serverNetworkState.dns_listen || [])[0] || '';
+                document.getElementById('net-web').value = (serverNetworkState.web_listen || [])[0] || '';
+
+                for (const proto of ['dot', 'doh', 'doq']) {
+                    const key = proto + '_listen';
+                    const val = (serverNetworkState[key] || [])?.[0] || '';
+                    const toggle = document.getElementById('toggle-' + proto);
+                    const input = document.getElementById('net-' + proto);
+                    if (val) {
+                        toggle.checked = true;
+                        input.disabled = false;
+                        input.value = val;
+                    } else {
+                        toggle.checked = false;
+                        input.disabled = true;
+                        input.value = '';
+                    }
+                }
+            } catch (_) {}
+        }
+
+        function toggleProtocol(proto, enabled) {
+            const input = document.getElementById('net-' + proto);
+            if (enabled) {
+                input.disabled = false;
+                if (!input.value) input.value = PROTO_DEFAULTS[proto];
+                saveProtocolChange();
+            } else {
+                input.disabled = true;
+                input.value = '';
+                saveProtocolChange();
+            }
+        }
+
+        async function saveProtocolChange() {
+            const body = {};
+            for (const proto of ['dot', 'doh', 'doq']) {
+                const key = proto + '_listen';
+                const toggle = document.getElementById('toggle-' + proto);
+                const input = document.getElementById('net-' + proto);
+                if (toggle.checked && input.value.trim()) {
+                    body[key] = input.value.trim();
+                } else {
+                    body[key] = null;
+                }
+            }
+
+            try {
+                const res = await fetch('/api/system/network', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body),
+                });
+                if (res.ok) {
+                    setTimeout(refreshNetworkSettings, 3000);
+                }
+            } catch (_) {}
+        }
+
+        function checkNetworkChanges() {
+            const fields = [
+                { id: 'net-dns', key: 'dns.listen', server: (serverNetworkState.dns_listen || [])[0] || '' },
+                { id: 'net-web', key: 'web.listen', server: (serverNetworkState.web_listen || [])[0] || '' },
+            ];
+
+            const changes = [];
+            for (const f of fields) {
+                const val = document.getElementById(f.id).value.trim();
+                if (val !== f.server) {
+                    changes.push(f.key + '=' + val);
+                }
+            }
+
+            const banner = document.getElementById('reconfigBanner');
+            if (changes.length > 0) {
+                const cmd = 'sudo oxi-dns --reconfigure ' + changes.join(' ');
+                document.getElementById('reconfigCmd').textContent = cmd;
+                if (!bannerDismissed) {
+                    banner.classList.add('visible');
+                    startNetworkPolling();
+                }
+            } else {
+                banner.classList.remove('visible');
+                bannerDismissed = false;
+                stopNetworkPolling();
+            }
+        }
+
+        function dismissBanner() {
+            document.getElementById('reconfigBanner').classList.remove('visible');
+            bannerDismissed = true;
+        }
+
+        async function copyReconfigCmd() {
+            const cmd = document.getElementById('reconfigCmd').textContent;
+            try {
+                await navigator.clipboard.writeText(cmd);
+                const btn = document.querySelector('.reconfig-btn-copy');
+                btn.textContent = 'Copied!';
+                setTimeout(() => { btn.textContent = 'Copy'; }, 2000);
+            } catch (_) {
+                const range = document.createRange();
+                range.selectNodeContents(document.getElementById('reconfigCmd'));
+                window.getSelection().removeAllRanges();
+                window.getSelection().addRange(range);
+            }
+        }
+
+        function startNetworkPolling() {
+            if (networkPollTimer) return;
+            networkPollTimer = setInterval(async () => {
+                await refreshNetworkSettings();
+                checkNetworkChanges();
+            }, 5000);
+        }
+
+        function stopNetworkPolling() {
+            if (networkPollTimer) {
+                clearInterval(networkPollTimer);
+                networkPollTimer = null;
+            }
+        }
+
+        // ---- Release Channel ----
+        async function refreshReleaseChannel() {
+            try {
+                const res = await fetch('/api/system/release-channel');
+                if (!res.ok) return;
+                const data = await res.json();
+                document.getElementById('releaseChannelSelect').value = data.channel;
+                document.getElementById('channelWarning').classList.toggle('visible', data.channel === 'development');
+            } catch (_) {}
+        }
+
+        async function setReleaseChannel(channel) {
+            document.getElementById('channelWarning').classList.toggle('visible', channel === 'development');
+            try {
+                await fetch('/api/system/release-channel', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ channel }),
+                });
+            } catch (_) {}
+        }
+
         // ---- System Settings ----
         async function refreshSystemSettings() {
             try {
@@ -2837,6 +3401,7 @@
                 msg.textContent = 'Update in progress — health-checking new binary...';
                 btn.style.display = 'none';
                 const startTime = Date.now();
+                let sawServerDown = false;
                 const poll = setInterval(async () => {
                     // After 120s give up polling
                     if (Date.now() - startTime > 120000) {
@@ -2848,7 +3413,7 @@
                         return;
                     }
                     try {
-                        const statusRes = await fetch('/api/system/update/status', { signal: AbortSignal.timeout(2000) });
+                        const statusRes = await fetch('/api/system/update/status', { signal: AbortSignal.timeout(3000) });
                         const status = await statusRes.json();
                         if (status.state === 'downloading') {
                             msg.textContent = 'Downloading update...';
@@ -2863,23 +3428,18 @@
                             btn.style.display = 'inline-block';
                             btn.disabled = false;
                             return;
+                        } else if (sawServerDown && status.state === 'idle') {
+                            // Server restarted and is idle — update completed
+                            clearInterval(poll);
+                            window.location.href = '/login';
+                            return;
                         }
                     } catch (e) {
-                        // Server may be restarting — try to reach it
+                        // Server is unreachable — mark it as down
+                        sawServerDown = true;
                         msg.textContent = 'Waiting for server to come back...';
                     }
-                    // Also check if server came back with new version
-                    try {
-                        const verRes = await fetch('/api/system/version', { signal: AbortSignal.timeout(2000) });
-                        if (verRes.ok) {
-                            const verInfo = await verRes.json();
-                            if (!verInfo.update_available) {
-                                clearInterval(poll);
-                                window.location.reload();
-                            }
-                        }
-                    } catch (e) { /* still restarting */ }
-                }, 2000);
+                }, 3000);
             } catch (e) {
                 msg.textContent = 'Update failed: ' + e.message;
                 msg.style.color = 'var(--color-red)';
@@ -3055,19 +3615,21 @@
             try {
                 const res = await fetch('/api/logs/settings');
                 const data = await res.json();
-                document.getElementById('logRetentionInput').value = data.retention_days;
+                document.getElementById('logRetentionInput').value = data.query_log_retention_days;
+                document.getElementById('statsRetentionInput').value = data.stats_retention_days;
                 document.getElementById('logAnonIpCheckbox').checked = data.anonymize_client_ip;
             } catch (e) { console.error('Failed to load log settings', e); }
         }
 
         async function saveLogSettings() {
-            const retention_days = parseInt(document.getElementById('logRetentionInput').value, 10);
+            const query_log_retention_days = parseInt(document.getElementById('logRetentionInput').value, 10);
+            const stats_retention_days = parseInt(document.getElementById('statsRetentionInput').value, 10);
             const anonymize_client_ip = document.getElementById('logAnonIpCheckbox').checked;
             try {
                 await fetch('/api/logs/settings', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ retention_days, anonymize_client_ip })
+                    body: JSON.stringify({ query_log_retention_days, stats_retention_days, anonymize_client_ip })
                 });
             } catch (e) { console.error('Failed to save log settings', e); }
         }

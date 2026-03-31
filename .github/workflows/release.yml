@@ -25,6 +25,7 @@ jobs:
       version: ${{ steps.version.outputs.version }}
       tag: ${{ steps.version.outputs.tag }}
       commit_sha: ${{ steps.push.outputs.commit_sha }}
+      is_prerelease: ${{ steps.version.outputs.is_prerelease }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -39,20 +40,30 @@ jobs:
           REF_NAME: ${{ github.ref_name }}
         run: |
           if [ "$REF_TYPE" = "tag" ]; then
-            # Triggered by tag push — extract version from tag name
             VERSION=$(echo "$REF_NAME" | sed 's/^v//' | sed 's/---.*//')
           else
-            # Triggered by version.txt change — read version from file
-            VERSION=$(cat version.txt | tr -d '[:space:]')
+            VERSION=$(head -n1 version.txt | tr -d '[:space:]')
           fi
-          # Cargo.toml needs strict semver (MAJOR.MINOR.PATCH)
+
+          # Check pre-release flag (line 2 of version.txt)
+          PRERELEASE_LINE=$(sed -n '2p' version.txt 2>/dev/null || echo "")
+          if [ "$PRERELEASE_LINE" = "--prerelease" ]; then
+            IS_PRERELEASE=true
+            TAG="v${VERSION}-dev"
+          else
+            IS_PRERELEASE=false
+            TAG="v${VERSION}"
+          fi
+
           NUMS=$(echo "$VERSION" | grep -oE '^[0-9]+(\.[0-9]+)*')
           IFS='.' read -r MAJOR MINOR PATCH _REST <<< "$NUMS"
           CARGO_VERSION="${MAJOR:-0}.${MINOR:-0}.${PATCH:-0}"
+
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "cargo_version=$CARGO_VERSION" >> "$GITHUB_OUTPUT"
-          echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
-          echo "Version: $VERSION (Cargo: $CARGO_VERSION)"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "is_prerelease=$IS_PRERELEASE" >> "$GITHUB_OUTPUT"
+          echo "Version: $VERSION (Cargo: $CARGO_VERSION, Tag: $TAG, Pre-release: $IS_PRERELEASE)"
 
       - name: Update Cargo.toml version
         env:
@@ -181,6 +192,7 @@ jobs:
           tag_name: ${{ needs.prepare.outputs.tag }}
           name: ${{ needs.prepare.outputs.tag }}
           generate_release_notes: true
+          prerelease: ${{ needs.prepare.outputs.is_prerelease == 'true' }}
           files: |
             artifacts/*.tar.gz
             artifacts/checksums.txt
@@ -238,7 +250,7 @@ jobs:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
             type=raw,value=${{ needs.prepare.outputs.version }}
-            type=raw,value=latest
+            type=raw,value=latest,enable=${{ needs.prepare.outputs.is_prerelease != 'true' }}
 
       - name: Build and push multi-arch image
         uses: docker/build-push-action@v6

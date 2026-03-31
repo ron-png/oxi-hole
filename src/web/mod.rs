@@ -24,6 +24,7 @@ use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::Instant;
+use tower_service::Service;
 use tracing::{info, warn};
 
 #[derive(Clone)]
@@ -43,8 +44,13 @@ pub struct AppState {
     pub anonymize_ip: std::sync::Arc<AtomicBool>,
     pub ipv6_enabled: std::sync::Arc<AtomicBool>,
     pub auth: AuthService,
-    #[doc(hidden)]
-    pub login_rate_limiter: LoginRateLimiter,
+    pub auth_rate_limiter: RateLimiter,
+    pub admin_rate_limiter: RateLimiter,
+    pub restart_signal: tokio::sync::watch::Sender<bool>,
+    pub release_channel: std::sync::Arc<tokio::sync::RwLock<String>>,
+    pub update_check_signal: tokio::sync::watch::Sender<bool>,
+    pub persistent_stats: crate::persistent_stats::PersistentStats,
+    pub stats_retention_days: std::sync::Arc<tokio::sync::RwLock<u32>>,
 }
 
 impl AppState {
@@ -77,9 +83,11 @@ impl AppState {
         config.system.auto_update = *self.auto_update.read().await;
         config.system.ipv6_enabled = self.ipv6_enabled.load(std::sync::atomic::Ordering::Relaxed);
         config.blocking.blocking_mode = self.blocking_mode.read().await.clone();
-        config.log.retention_days = *self.log_retention_days.read().await;
+        config.log.query_log_retention_days = *self.log_retention_days.read().await;
+        config.log.stats_retention_days = *self.stats_retention_days.read().await;
         config.log.anonymize_client_ip =
             self.anonymize_ip.load(std::sync::atomic::Ordering::Relaxed);
+        config.system.release_channel = self.release_channel.read().await.clone();
 
         if let Err(e) = config.save(&self.config_path) {
             tracing::warn!("Failed to save config: {}", e);
@@ -87,12 +95,28 @@ impl AppState {
     }
 }
 
+#[derive(Clone)]
+struct CspNonce(String);
+
+#[derive(Clone)]
+struct IsHttps;
+
 // ==================== Security Headers Middleware ====================
 
 async fn security_headers_middleware(
-    request: axum::extract::Request,
+    mut request: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> Response {
+    // Generate per-request nonce for CSP
+    let nonce_bytes: [u8; 16] = rand::random();
+    let nonce = hex::encode(nonce_bytes);
+
+    // Store nonce in request extensions for HTML handlers
+    request.extensions_mut().insert(CspNonce(nonce.clone()));
+
+    // Check if this is an HTTPS request (set by HTTPS middleware layer)
+    let is_https = request.extensions().get::<IsHttps>().is_some();
+
     let mut response = next.run(request).await;
     let headers = response.headers_mut();
     headers.insert(axum::http::header::X_FRAME_OPTIONS, "DENY".parse().unwrap());
@@ -102,9 +126,10 @@ async fn security_headers_middleware(
     );
     headers.insert(
         axum::http::header::CONTENT_SECURITY_POLICY,
-        "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
-            .parse()
-            .unwrap(),
+        format!(
+            "default-src 'self'; script-src 'self' 'nonce-{}'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
+            nonce
+        ).parse().unwrap(),
     );
     headers.insert(
         axum::http::header::REFERRER_POLICY,
@@ -114,55 +139,54 @@ async fn security_headers_middleware(
         axum::http::header::HeaderName::from_static("permissions-policy"),
         "camera=(), microphone=(), geolocation=()".parse().unwrap(),
     );
+
+    if is_https {
+        headers.insert(
+            axum::http::header::STRICT_TRANSPORT_SECURITY,
+            "max-age=31536000; includeSubDomains".parse().unwrap(),
+        );
+    }
+
     response
 }
 
-// ==================== Login Rate Limiter ====================
+// ==================== Rate Limiter ====================
 
-/// In-memory per-IP rate limiter for login attempts.
 #[derive(Clone)]
-pub struct LoginRateLimiter {
-    /// Map from IP -> (attempt_count, window_start)
+pub struct RateLimiter {
+    max_attempts: u32,
+    window_secs: u64,
     attempts: Arc<DashMap<String, (u32, Instant)>>,
 }
 
-impl Default for LoginRateLimiter {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl LoginRateLimiter {
-    pub fn new() -> Self {
+impl RateLimiter {
+    pub fn new(max_attempts: u32, window_secs: u64) -> Self {
         Self {
+            max_attempts,
+            window_secs,
             attempts: Arc::new(DashMap::new()),
         }
     }
 
-    /// Returns true if the request should be allowed, false if rate limited.
-    /// Allows 5 attempts per 60-second window per IP.
-    fn check_rate_limit(&self, ip: &str) -> bool {
+    pub fn check_rate_limit(&self, ip: &str) -> bool {
         let now = Instant::now();
-        let window = std::time::Duration::from_secs(60);
-        let max_attempts: u32 = 5;
+        let window = std::time::Duration::from_secs(self.window_secs);
 
         let mut entry = self.attempts.entry(ip.to_string()).or_insert((0, now));
         let (count, window_start) = entry.value_mut();
 
-        // Reset window if expired
         if now.duration_since(*window_start) > window {
             *count = 0;
             *window_start = now;
         }
 
         *count += 1;
-        *count <= max_attempts
+        *count <= self.max_attempts
     }
 
-    /// Periodically clean up stale entries (call from a background task).
-    fn cleanup(&self) {
+    pub fn cleanup(&self) {
         let now = Instant::now();
-        let window = std::time::Duration::from_secs(120);
+        let window = std::time::Duration::from_secs(self.window_secs * 2);
         self.attempts
             .retain(|_, (_, window_start)| now.duration_since(*window_start) < window);
     }
@@ -242,16 +266,40 @@ fn is_ssrf_target(url: &str) -> bool {
     false
 }
 
-pub async fn run_web_server(listen: &[String], state: AppState) -> anyhow::Result<()> {
+async fn https_redirect(
+    axum::extract::State(https_host): axum::extract::State<String>,
+    uri: axum::http::Uri,
+) -> Response {
+    let path = uri.path_and_query().map(|pq| pq.as_str()).unwrap_or("/");
+    let url = format!("https://{}{}", https_host, path);
+    axum::response::Redirect::permanent(&url).into_response()
+}
+
+async fn mark_https_middleware(
+    mut request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    request.extensions_mut().insert(IsHttps);
+    next.run(request).await
+}
+
+pub async fn run_web_server(
+    listen: &[String],
+    https_listen: Option<&[String]>,
+    tls_config: Option<Arc<rustls::ServerConfig>>,
+    state: AppState,
+) -> anyhow::Result<()> {
     let auth_for_middleware = state.auth.clone();
 
-    // Spawn background cleanup for login rate limiter
-    let cleanup_limiter = state.login_rate_limiter.clone();
+    // Spawn background cleanup for rate limiters
+    let auth_cleanup = state.auth_rate_limiter.clone();
+    let admin_cleanup = state.admin_rate_limiter.clone();
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
         loop {
             interval.tick().await;
-            cleanup_limiter.cleanup();
+            auth_cleanup.cleanup();
+            admin_cleanup.cleanup();
         }
     });
 
@@ -262,6 +310,7 @@ pub async fn run_web_server(listen: &[String], state: AppState) -> anyhow::Resul
         // Auth API
         .route("/api/auth/login", post(api_auth_login))
         .route("/api/auth/setup", post(api_auth_setup))
+        .route("/api/system/setup-info", get(api_setup_info))
         .route("/api/auth/logout", post(api_auth_logout))
         .route("/api/auth/me", get(api_auth_me))
         .route("/api/auth/change-password", post(api_change_password))
@@ -279,6 +328,9 @@ pub async fn run_web_server(listen: &[String], state: AppState) -> anyhow::Resul
         .route("/", get(dashboard))
         // Stats
         .route("/api/stats", get(api_stats))
+        .route("/api/stats/history", get(api_stats_history))
+        .route("/api/stats/top-domains", get(api_stats_top_domains))
+        .route("/api/stats/summary", get(api_stats_summary))
         .route("/api/queries", get(api_queries))
         // Master blocking
         .route("/api/blocking", get(api_blocking_status))
@@ -314,7 +366,10 @@ pub async fn run_web_server(listen: &[String], state: AppState) -> anyhow::Resul
         .route("/api/upstreams", get(api_upstreams))
         .route("/api/upstreams/add", post(api_add_upstream))
         .route("/api/upstreams/remove", post(api_remove_upstream))
+        // Network configuration
+        .route("/api/system/network", get(api_system_network).post(api_update_network))
         // System settings
+        .route("/api/system/release-channel", get(api_get_release_channel).post(api_set_release_channel))
         .route("/api/system/auto-update", get(api_get_auto_update))
         .route("/api/system/auto-update", post(api_set_auto_update))
         .route("/api/system/ipv6", get(api_get_ipv6))
@@ -344,6 +399,10 @@ pub async fn run_web_server(listen: &[String], state: AppState) -> anyhow::Resul
             "/api/system/update/status/dismiss",
             post(api_dismiss_update_status),
         )
+        // TLS certificate management
+        .route("/api/system/tls", get(api_tls_status))
+        .route("/api/system/tls/upload", post(api_tls_upload))
+        .route("/api/system/tls/remove", post(api_tls_remove))
         // Query log
         .route("/api/logs", get(api_logs))
         .route("/api/logs/settings", get(api_get_log_settings))
@@ -358,33 +417,156 @@ pub async fn run_web_server(listen: &[String], state: AppState) -> anyhow::Resul
         .with_state(state);
 
     let mut handles = Vec::new();
-    for addr in listen {
-        let app = app.clone();
-        let sock_addr: std::net::SocketAddr = addr.parse()?;
-        let domain = if sock_addr.is_ipv4() {
-            socket2::Domain::IPV4
-        } else {
-            socket2::Domain::IPV6
-        };
-        let socket =
-            socket2::Socket::new(domain, socket2::Type::STREAM, Some(socket2::Protocol::TCP))?;
-        socket.set_reuse_port(true)?;
-        socket.set_nonblocking(true)?;
-        socket.bind(&sock_addr.into())?;
-        socket.listen(1024)?;
-        let listener = tokio::net::TcpListener::from_std(socket.into())?;
-        let addr = addr.clone();
-        info!("Web admin listening on {}", addr);
-        handles.push(tokio::spawn(async move {
-            if let Err(e) = axum::serve(
-                listener,
-                app.into_make_service_with_connect_info::<SocketAddr>(),
-            )
-            .await
-            {
-                tracing::error!("Web server error on {}: {}", addr, e);
+    let is_https_active = https_listen.is_some() && tls_config.is_some();
+
+    if is_https_active {
+        let tls_cfg = tls_config.unwrap();
+        let https_addrs = https_listen.unwrap();
+
+        // HTTPS app: full router + IsHttps marker
+        let https_app = app.clone()
+            .layer(axum::middleware::from_fn(mark_https_middleware));
+
+        for addr in https_addrs {
+            let https_app = https_app.clone();
+            let tls_acceptor = tokio_rustls::TlsAcceptor::from(tls_cfg.clone());
+            let sock_addr: std::net::SocketAddr = addr.parse()?;
+            let domain = if sock_addr.is_ipv4() {
+                socket2::Domain::IPV4
+            } else {
+                socket2::Domain::IPV6
+            };
+            let socket = socket2::Socket::new(
+                domain,
+                socket2::Type::STREAM,
+                Some(socket2::Protocol::TCP),
+            )?;
+            socket.set_reuse_port(true)?;
+            socket.set_nonblocking(true)?;
+            socket.bind(&sock_addr.into())?;
+            socket.listen(1024)?;
+            let tcp_listener = tokio::net::TcpListener::from_std(socket.into())?;
+            let addr_str = addr.clone();
+            info!("Web admin HTTPS listening on {}", addr_str);
+
+            handles.push(tokio::spawn(async move {
+                loop {
+                    let (tcp_stream, _peer_addr) = match tcp_listener.accept().await {
+                        Ok(s) => s,
+                        Err(e) => {
+                            tracing::warn!("HTTPS accept error: {}", e);
+                            continue;
+                        }
+                    };
+                    let tls_acceptor = tls_acceptor.clone();
+                    let app = https_app.clone();
+                    tokio::spawn(async move {
+                        let tls_stream = match tls_acceptor.accept(tcp_stream).await {
+                            Ok(s) => s,
+                            Err(e) => {
+                                tracing::debug!("TLS handshake failed: {}", e);
+                                return;
+                            }
+                        };
+                        let io = hyper_util::rt::TokioIo::new(tls_stream);
+                        let service =
+                            hyper::service::service_fn(move |req: hyper::Request<hyper::body::Incoming>| {
+                                let mut app = app.clone();
+                                async move { app.call(req).await }
+                            });
+                        if let Err(e) =
+                            hyper_util::server::conn::auto::Builder::new(hyper_util::rt::TokioExecutor::new())
+                                .serve_connection(io, service)
+                                .await
+                        {
+                            tracing::debug!("HTTPS connection error: {}", e);
+                        }
+                    });
+                }
+            }));
+        }
+
+        // HTTP becomes redirect-only
+        let redirect_target = https_addrs.first().cloned().unwrap_or_default();
+        let redirect_host = {
+            let host_part = redirect_target
+                .rsplit_once(':')
+                .map(|(h, _)| h)
+                .unwrap_or(&redirect_target);
+            let port_part = redirect_target
+                .rsplit_once(':')
+                .map(|(_, p)| p)
+                .unwrap_or("9443");
+            if host_part == "0.0.0.0" || host_part == "[::]" || host_part.is_empty() {
+                format!("localhost:{}", port_part)
+            } else {
+                redirect_target.clone()
             }
-        }));
+        };
+
+        let redirect_app = Router::new()
+            .fallback(https_redirect)
+            .with_state(redirect_host);
+
+        for addr in listen {
+            let redirect_app = redirect_app.clone();
+            let sock_addr: std::net::SocketAddr = addr.parse()?;
+            let domain = if sock_addr.is_ipv4() {
+                socket2::Domain::IPV4
+            } else {
+                socket2::Domain::IPV6
+            };
+            let socket = socket2::Socket::new(
+                domain,
+                socket2::Type::STREAM,
+                Some(socket2::Protocol::TCP),
+            )?;
+            socket.set_reuse_port(true)?;
+            socket.set_nonblocking(true)?;
+            socket.bind(&sock_addr.into())?;
+            socket.listen(1024)?;
+            let listener = tokio::net::TcpListener::from_std(socket.into())?;
+            let addr_str = addr.clone();
+            info!("Web admin HTTP (redirect) listening on {}", addr_str);
+            handles.push(tokio::spawn(async move {
+                if let Err(e) = axum::serve(listener, redirect_app.into_make_service()).await {
+                    tracing::error!("HTTP redirect error on {}: {}", addr_str, e);
+                }
+            }));
+        }
+    } else {
+        // Normal HTTP mode (existing behavior)
+        for addr in listen {
+            let app = app.clone();
+            let sock_addr: std::net::SocketAddr = addr.parse()?;
+            let domain = if sock_addr.is_ipv4() {
+                socket2::Domain::IPV4
+            } else {
+                socket2::Domain::IPV6
+            };
+            let socket = socket2::Socket::new(
+                domain,
+                socket2::Type::STREAM,
+                Some(socket2::Protocol::TCP),
+            )?;
+            socket.set_reuse_port(true)?;
+            socket.set_nonblocking(true)?;
+            socket.bind(&sock_addr.into())?;
+            socket.listen(1024)?;
+            let listener = tokio::net::TcpListener::from_std(socket.into())?;
+            let addr_str = addr.clone();
+            info!("Web admin listening on {}", addr_str);
+            handles.push(tokio::spawn(async move {
+                if let Err(e) = axum::serve(
+                    listener,
+                    app.into_make_service_with_connect_info::<SocketAddr>(),
+                )
+                .await
+                {
+                    tracing::error!("Web server error on {}: {}", addr_str, e);
+                }
+            }));
+        }
     }
 
     futures::future::join_all(handles).await;
@@ -415,12 +597,134 @@ fn require_permission(user: &AuthenticatedUser, perm: Permission) -> Result<(), 
 
 // ==================== Auth Pages ====================
 
-async fn login_page() -> Html<&'static str> {
-    Html(include_str!("login.html"))
+async fn login_page(
+    nonce: Option<axum::Extension<CspNonce>>,
+) -> Html<String> {
+    let html = include_str!("login.html");
+    let nonce_val = nonce.map(|n| n.0 .0.clone()).unwrap_or_default();
+    Html(html.replace("<script>", &format!("<script nonce=\"{}\">", nonce_val)))
 }
 
-async fn setup_page() -> Html<&'static str> {
-    Html(include_str!("setup.html"))
+async fn setup_page(
+    nonce: Option<axum::Extension<CspNonce>>,
+) -> Html<String> {
+    let html = include_str!("setup.html");
+    let nonce_val = nonce.map(|n| n.0 .0.clone()).unwrap_or_default();
+    Html(html.replace("<script>", &format!("<script nonce=\"{}\">", nonce_val)))
+}
+
+async fn api_setup_info(
+    State(state): State<AppState>,
+) -> Json<serde_json::Value> {
+    let config = Config::load(&state.config_path).unwrap_or_default();
+
+    let dns_listen = config.dns.listen.first()
+        .cloned()
+        .unwrap_or_else(|| "0.0.0.0:53".to_string());
+
+    let web_listen = config.web.listen.first()
+        .cloned()
+        .unwrap_or_else(|| "0.0.0.0:9853".to_string());
+
+    // Detect server's LAN IP using UDP socket trick (no actual traffic sent)
+    let server_ip = get_local_ip().unwrap_or_else(|| "127.0.0.1".to_string());
+
+    Json(serde_json::json!({
+        "dns_listen": dns_listen,
+        "web_listen": web_listen,
+        "server_ip": server_ip,
+    }))
+}
+
+async fn api_system_network(
+    State(state): State<AppState>,
+    axum::Extension(user): axum::Extension<AuthenticatedUser>,
+) -> Response {
+    if !user.permissions.contains(&Permission::ManageSystem) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+
+    let config = Config::load(&state.config_path).unwrap_or_default();
+
+    Json(serde_json::json!({
+        "dns_listen": config.dns.listen,
+        "web_listen": config.web.listen,
+        "dot_listen": config.dns.dot_listen,
+        "doh_listen": config.dns.doh_listen,
+        "doq_listen": config.dns.doq_listen,
+    }))
+    .into_response()
+}
+
+#[derive(Deserialize)]
+struct UpdateNetworkRequest {
+    dot_listen: Option<serde_json::Value>,
+    doh_listen: Option<serde_json::Value>,
+    doq_listen: Option<serde_json::Value>,
+}
+
+async fn api_update_network(
+    State(state): State<AppState>,
+    axum::Extension(user): axum::Extension<AuthenticatedUser>,
+    Json(req): Json<UpdateNetworkRequest>,
+) -> Response {
+    if !user.permissions.contains(&Permission::ManageSystem) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+
+    let mut config = match Config::load(&state.config_path) {
+        Ok(c) => c,
+        Err(e) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("{}", e)}))).into_response();
+        }
+    };
+
+    if let Some(ref val) = req.dot_listen {
+        config.dns.dot_listen = match val {
+            serde_json::Value::Null => None,
+            serde_json::Value::String(s) if s.is_empty() => None,
+            serde_json::Value::String(s) => Some(vec![s.clone()]),
+            _ => config.dns.dot_listen.clone(),
+        };
+    }
+    if let Some(ref val) = req.doh_listen {
+        config.dns.doh_listen = match val {
+            serde_json::Value::Null => None,
+            serde_json::Value::String(s) if s.is_empty() => None,
+            serde_json::Value::String(s) => Some(vec![s.clone()]),
+            _ => config.dns.doh_listen.clone(),
+        };
+    }
+    if let Some(ref val) = req.doq_listen {
+        config.dns.doq_listen = match val {
+            serde_json::Value::Null => None,
+            serde_json::Value::String(s) if s.is_empty() => None,
+            serde_json::Value::String(s) => Some(vec![s.clone()]),
+            _ => config.dns.doq_listen.clone(),
+        };
+    }
+
+    if let Err(e) = config.save(&state.config_path) {
+        return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("{}", e)}))).into_response();
+    }
+
+    let _ = state.restart_signal.send(true);
+
+    Json(serde_json::json!({
+        "dns_listen": config.dns.listen,
+        "web_listen": config.web.listen,
+        "dot_listen": config.dns.dot_listen,
+        "doh_listen": config.dns.doh_listen,
+        "doq_listen": config.dns.doq_listen,
+    }))
+    .into_response()
+}
+
+fn get_local_ip() -> Option<String> {
+    let socket = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
+    socket.connect("8.8.8.8:53").ok()?;
+    let addr = socket.local_addr().ok()?;
+    Some(addr.ip().to_string())
 }
 
 // ==================== Auth API ====================
@@ -439,7 +743,7 @@ async fn api_auth_login(
     let ip = addr.ip().to_string();
 
     // Rate limit login attempts per IP
-    if !state.login_rate_limiter.check_rate_limit(&ip) {
+    if !state.auth_rate_limiter.check_rate_limit(&ip) {
         warn!("Login rate limit exceeded for IP {}", ip);
         return (
             StatusCode::TOO_MANY_REQUESTS,
@@ -482,6 +786,14 @@ async fn api_auth_setup(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Json(req): Json<LoginRequest>,
 ) -> Response {
+    let ip = addr.ip().to_string();
+    if !state.auth_rate_limiter.check_rate_limit(&ip) {
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(serde_json::json!({"error": "Too many attempts. Please try again later."})),
+        ).into_response();
+    }
+
     let all_permissions: Vec<Permission> = Permission::ALL.to_vec();
     match state
         .auth
@@ -614,8 +926,17 @@ async fn api_list_users(
 async fn api_create_user(
     axum::Extension(user): axum::Extension<AuthenticatedUser>,
     State(state): State<AppState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Json(req): Json<CreateUserRequest>,
 ) -> Result<Json<crate::auth::User>, Response> {
+    let ip = addr.ip().to_string();
+    if !state.admin_rate_limiter.check_rate_limit(&ip) {
+        return Err((
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(serde_json::json!({"error": "Too many requests. Please try again later."})),
+        ).into_response());
+    }
+
     require_permission(&user, Permission::ManageUsers)?;
 
     // Cannot grant permissions you don't have
@@ -742,9 +1063,18 @@ async fn api_delete_user(
 async fn api_reset_password(
     axum::Extension(user): axum::Extension<AuthenticatedUser>,
     State(state): State<AppState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     axum::extract::Path(id): axum::extract::Path<i64>,
     Json(req): Json<ResetPasswordRequest>,
 ) -> Result<StatusCode, Response> {
+    let ip = addr.ip().to_string();
+    if !state.admin_rate_limiter.check_rate_limit(&ip) {
+        return Err((
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(serde_json::json!({"error": "Too many requests. Please try again later."})),
+        ).into_response());
+    }
+
     require_permission(&user, Permission::ManageUsers)?;
 
     match state.auth.reset_password(id, &req.password).await {
@@ -762,8 +1092,17 @@ async fn api_reset_password(
 async fn api_change_password(
     axum::Extension(user): axum::Extension<AuthenticatedUser>,
     State(state): State<AppState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Json(req): Json<ChangePasswordRequest>,
 ) -> Result<StatusCode, Response> {
+    let ip = addr.ip().to_string();
+    if !state.auth_rate_limiter.check_rate_limit(&ip) {
+        return Err((
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(serde_json::json!({"error": "Too many attempts. Please try again later."})),
+        ).into_response());
+    }
+
     if !state
         .auth
         .verify_password(user.id, &req.current_password)
@@ -816,8 +1155,17 @@ async fn api_list_tokens(
 async fn api_create_token(
     axum::Extension(user): axum::Extension<AuthenticatedUser>,
     State(state): State<AppState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Json(req): Json<CreateTokenRequest>,
 ) -> Result<Json<CreateTokenResponse>, Response> {
+    let ip = addr.ip().to_string();
+    if !state.admin_rate_limiter.check_rate_limit(&ip) {
+        return Err((
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(serde_json::json!({"error": "Too many requests. Please try again later."})),
+        ).into_response());
+    }
+
     // Cannot grant permissions you don't have
     for perm in &req.permissions {
         if !user.has_permission(*perm) {
@@ -878,8 +1226,12 @@ async fn api_revoke_token(
 
 // ==================== Dashboard ====================
 
-async fn dashboard() -> Html<&'static str> {
-    Html(include_str!("dashboard.html"))
+async fn dashboard(
+    nonce: Option<axum::Extension<CspNonce>>,
+) -> Html<String> {
+    let html = include_str!("dashboard.html");
+    let nonce_val = nonce.map(|n| n.0 .0.clone()).unwrap_or_default();
+    Html(html.replace("<script>", &format!("<script nonce=\"{}\">", nonce_val)))
 }
 
 // ==================== Stats ====================
@@ -1422,7 +1774,8 @@ async fn api_version(
     axum::Extension(_user): axum::Extension<AuthenticatedUser>,
     State(state): State<AppState>,
 ) -> Json<crate::update::VersionInfo> {
-    Json(state.update_checker.check(false).await)
+    let channel = state.release_channel.read().await.clone();
+    Json(state.update_checker.check(false, &channel).await)
 }
 
 async fn api_version_check(
@@ -1430,7 +1783,8 @@ async fn api_version_check(
     State(state): State<AppState>,
 ) -> Result<Json<crate::update::VersionInfo>, Response> {
     require_permission(&user, Permission::ManageSystem)?;
-    Ok(Json(state.update_checker.check(true).await))
+    let channel = state.release_channel.read().await.clone();
+    Ok(Json(state.update_checker.check(true, &channel).await))
 }
 
 #[derive(Serialize)]
@@ -1565,7 +1919,8 @@ async fn api_logs(
 
 #[derive(Serialize)]
 struct LogSettingsResponse {
-    retention_days: u32,
+    query_log_retention_days: u32,
+    stats_retention_days: u32,
     anonymize_client_ip: bool,
 }
 
@@ -1575,7 +1930,8 @@ async fn api_get_log_settings(
 ) -> Result<Json<LogSettingsResponse>, Response> {
     require_permission(&user, Permission::ViewLogs)?;
     Ok(Json(LogSettingsResponse {
-        retention_days: *state.log_retention_days.read().await,
+        query_log_retention_days: *state.log_retention_days.read().await,
+        stats_retention_days: *state.stats_retention_days.read().await,
         anonymize_client_ip: state
             .anonymize_ip
             .load(std::sync::atomic::Ordering::Relaxed),
@@ -1585,7 +1941,9 @@ async fn api_get_log_settings(
 #[derive(Deserialize)]
 struct LogSettingsRequest {
     #[serde(default)]
-    retention_days: Option<u32>,
+    query_log_retention_days: Option<u32>,
+    #[serde(default)]
+    stats_retention_days: Option<u32>,
     #[serde(default)]
     anonymize_client_ip: Option<bool>,
 }
@@ -1596,10 +1954,15 @@ async fn api_set_log_settings(
     Json(req): Json<LogSettingsRequest>,
 ) -> Result<StatusCode, Response> {
     require_permission(&user, Permission::ManageSystem)?;
-    if let Some(days) = req.retention_days {
+    if let Some(days) = req.query_log_retention_days {
         let clamped = days.clamp(1, 90);
         *state.log_retention_days.write().await = clamped;
-        info!("Log retention set to {} days", clamped);
+        info!("Query log retention set to {} days", clamped);
+    }
+    if let Some(days) = req.stats_retention_days {
+        let clamped = days.clamp(1, 365);
+        *state.stats_retention_days.write().await = clamped;
+        info!("Stats retention set to {} days", clamped);
     }
     if let Some(anonymize) = req.anonymize_client_ip {
         state
@@ -1609,4 +1972,299 @@ async fn api_set_log_settings(
     }
     state.save_config().await;
     Ok(StatusCode::OK)
+}
+
+// ==================== TLS Certificate Management ====================
+
+async fn api_tls_status(
+    State(state): State<AppState>,
+    axum::Extension(user): axum::Extension<AuthenticatedUser>,
+) -> Response {
+    if !user.permissions.contains(&Permission::ManageSystem) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+
+    let config = Config::load(&state.config_path).unwrap_or_default();
+    let cert_info = crate::cert_parser::get_current_cert_info(&config.tls);
+
+    match cert_info {
+        Ok(Some(info)) => Json(serde_json::json!({
+            "subject": info.subject,
+            "issuer": info.issuer,
+            "not_after": info.not_after,
+            "self_signed": info.self_signed,
+            "cert_path": config.tls.cert_path,
+            "key_path": config.tls.key_path,
+        }))
+        .into_response(),
+        _ => Json(serde_json::json!({
+            "subject": "Oxi-DNS Server",
+            "issuer": "Oxi-DNS Server",
+            "not_after": null,
+            "self_signed": true,
+            "cert_path": null,
+            "key_path": null,
+        }))
+        .into_response(),
+    }
+}
+
+async fn api_tls_upload(
+    State(state): State<AppState>,
+    axum::Extension(user): axum::Extension<AuthenticatedUser>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    mut multipart: axum::extract::Multipart,
+) -> Response {
+    let ip = addr.ip().to_string();
+    if !state.admin_rate_limiter.check_rate_limit(&ip) {
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(serde_json::json!({"error": "Too many requests. Please try again later."})),
+        ).into_response();
+    }
+
+    if !user.permissions.contains(&Permission::ManageSystem) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+
+    let mut cert_data: Option<Vec<u8>> = None;
+    let mut key_data: Option<Vec<u8>> = None;
+    let mut p12_data: Option<Vec<u8>> = None;
+    let mut password: Option<String> = None;
+
+    while let Ok(Some(field)) = multipart.next_field().await {
+        let name = field.name().unwrap_or("").to_string();
+        match name.as_str() {
+            "cert_file" => {
+                cert_data = field.bytes().await.ok().map(|b| b.to_vec());
+            }
+            "key_file" => {
+                key_data = field.bytes().await.ok().map(|b| b.to_vec());
+            }
+            "p12_file" => {
+                p12_data = field.bytes().await.ok().map(|b| b.to_vec());
+            }
+            "password" => {
+                password = field.text().await.ok();
+            }
+            _ => {}
+        }
+    }
+
+    let parsed = if let Some(ref p12) = p12_data {
+        crate::cert_parser::parse_pkcs12(p12, password.as_deref())
+    } else if let Some(ref cert) = cert_data {
+        crate::cert_parser::parse_pem(cert, key_data.as_deref(), password.as_deref())
+    } else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "no certificate file provided"})),
+        )
+            .into_response();
+    };
+
+    let parsed = match parsed {
+        Ok(p) => p,
+        Err(crate::cert_parser::ParseError::PasswordRequired { cert_type }) => {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(serde_json::json!({
+                    "error": "password_required",
+                    "type": cert_type,
+                })),
+            )
+                .into_response();
+        }
+        Err(crate::cert_parser::ParseError::Other(e)) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": format!("{}", e)})),
+            )
+                .into_response();
+        }
+    };
+
+    let config_dir = state
+        .config_path
+        .parent()
+        .unwrap_or(std::path::Path::new("/etc/oxi-dns"));
+    let cert_path = config_dir.join("cert.pem");
+    let key_path = config_dir.join("key.pem");
+
+    if let Err(e) = crate::cert_parser::write_cert_files(&parsed, &cert_path, &key_path) {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": format!("{}", e)})),
+        )
+            .into_response();
+    }
+
+    let mut config = Config::load(&state.config_path).unwrap_or_default();
+    config.tls.cert_path = Some(cert_path.to_string_lossy().to_string());
+    config.tls.key_path = Some(key_path.to_string_lossy().to_string());
+    if let Err(e) = config.save(&state.config_path) {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": format!("{}", e)})),
+        )
+            .into_response();
+    }
+
+    let _ = state.restart_signal.send(true);
+
+    Json(serde_json::json!({
+        "subject": parsed.subject,
+        "issuer": parsed.issuer,
+        "not_after": parsed.not_after,
+        "self_signed": parsed.self_signed,
+    }))
+    .into_response()
+}
+
+async fn api_tls_remove(
+    State(state): State<AppState>,
+    axum::Extension(user): axum::Extension<AuthenticatedUser>,
+) -> Response {
+    if !user.permissions.contains(&Permission::ManageSystem) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+
+    let config_dir = state
+        .config_path
+        .parent()
+        .unwrap_or(std::path::Path::new("/etc/oxi-dns"));
+    let _ = std::fs::remove_file(config_dir.join("cert.pem"));
+    let _ = std::fs::remove_file(config_dir.join("key.pem"));
+
+    let mut config = Config::load(&state.config_path).unwrap_or_default();
+    config.tls.cert_path = None;
+    config.tls.key_path = None;
+    if let Err(e) = config.save(&state.config_path) {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": format!("{}", e)})),
+        )
+            .into_response();
+    }
+
+    let _ = state.restart_signal.send(true);
+
+    Json(serde_json::json!({"success": true})).into_response()
+}
+
+async fn api_get_release_channel(
+    State(state): State<AppState>,
+    axum::Extension(user): axum::Extension<AuthenticatedUser>,
+) -> Response {
+    if !user.permissions.contains(&Permission::ManageSystem) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    let channel = state.release_channel.read().await.clone();
+    Json(serde_json::json!({"channel": channel})).into_response()
+}
+
+#[derive(Deserialize)]
+struct SetReleaseChannelRequest {
+    channel: String,
+}
+
+async fn api_set_release_channel(
+    State(state): State<AppState>,
+    axum::Extension(user): axum::Extension<AuthenticatedUser>,
+    Json(req): Json<SetReleaseChannelRequest>,
+) -> Response {
+    if !user.permissions.contains(&Permission::ManageSystem) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+
+    let channel = match req.channel.as_str() {
+        "stable" | "development" => req.channel.clone(),
+        _ => {
+            return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "Invalid channel. Must be 'stable' or 'development'."}))).into_response();
+        }
+    };
+
+    *state.release_channel.write().await = channel.clone();
+    state.save_config().await;
+
+    // Trigger immediate update check
+    let _ = state.update_check_signal.send(true);
+
+    Json(serde_json::json!({"channel": channel})).into_response()
+}
+
+#[derive(Deserialize)]
+struct StatsHistoryQuery {
+    period: Option<String>,
+}
+
+async fn api_stats_history(
+    State(state): State<AppState>,
+    axum::extract::Query(params): axum::extract::Query<StatsHistoryQuery>,
+) -> Response {
+    let period = params.period.as_deref().unwrap_or("24h");
+    let hours: i64 = match period {
+        "24h" => 24,
+        "7d" => 7 * 24,
+        "30d" => 30 * 24,
+        "90d" => 90 * 24,
+        _ => 24,
+    };
+
+    let now = chrono::Utc::now();
+    let from = (now - chrono::Duration::hours(hours)).format("%Y-%m-%dT%H:00:00").to_string();
+    let to = now.format("%Y-%m-%dT%H:00:00").to_string();
+
+    match state.persistent_stats.get_hourly_stats(&from, &to).await {
+        Ok(data) => Json(serde_json::json!({
+            "period": period,
+            "data": data,
+        })).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("{}", e)}))).into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+struct TopDomainsQuery {
+    days: Option<u32>,
+    limit: Option<u32>,
+}
+
+async fn api_stats_top_domains(
+    State(state): State<AppState>,
+    axum::extract::Query(params): axum::extract::Query<TopDomainsQuery>,
+) -> Response {
+    let days = params.days.unwrap_or(7);
+    let limit = params.limit.unwrap_or(10);
+
+    match state.persistent_stats.get_top_domains(days, limit).await {
+        Ok(data) => Json(serde_json::json!({
+            "days": days,
+            "top_queried": data.top_queried,
+            "top_blocked": data.top_blocked,
+        })).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("{}", e)}))).into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+struct StatsSummaryQuery {
+    days: Option<u32>,
+}
+
+async fn api_stats_summary(
+    State(state): State<AppState>,
+    axum::extract::Query(params): axum::extract::Query<StatsSummaryQuery>,
+) -> Response {
+    let days = params.days.unwrap_or(30);
+
+    match state.persistent_stats.get_summary(days).await {
+        Ok(data) => Json(serde_json::json!({
+            "days": days,
+            "total_queries": data.total_queries,
+            "blocked_queries": data.blocked_queries,
+            "block_percentage": data.block_percentage,
+        })).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("{}", e)}))).into_response(),
+    }
 }

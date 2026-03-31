@@ -4,220 +4,406 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Setup — Oxi-DNS</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500&family=JetBrains+Mono:wght@300;400;500;600&display=swap" rel="stylesheet">
     <style>
         :root {
-            --color-accent: #8a64e5;
-            --color-accent-hover: #9d7cf2;
-            --color-red: #f87171;
-            --text-primary: #e6e6e6;
-            --text-secondary: #999;
-            --text-muted: #666;
-            --bg-page: #000;
-            --bg-subtle: #111;
-            --border: #222;
-            --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            --accent: #00d4aa;
+            --accent-dim: rgba(0, 212, 170, 0.12);
+            --accent-glow: rgba(0, 212, 170, 0.25);
+            --accent-hover: #00eabc;
+            --warn: #e5a835;
+            --error: #ef6461;
+            --error-dim: rgba(239, 100, 97, 0.08);
+            --text-1: #eaeaea;
+            --text-2: #8a8f98;
+            --text-3: #505560;
+            --surface-0: #0a0a0c;
+            --surface-1: #101014;
+            --surface-2: #16161b;
+            --border: #1e1e24;
+            --font-body: 'DM Sans', sans-serif;
+            --font-mono: 'JetBrains Mono', monospace;
         }
 
-        *, *::before, *::after {
-            box-sizing: border-box;
-            margin: 0;
-            padding: 0;
-        }
-
-        html {
-            -webkit-font-smoothing: antialiased;
-        }
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+        html { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
 
         body {
-            font-family: var(--font-sans);
+            font-family: var(--font-body);
             font-size: 15px;
             line-height: 1.6;
-            color: var(--text-secondary);
-            background: var(--bg-page);
+            color: var(--text-2);
+            background: var(--surface-0);
             min-height: 100vh;
             display: flex;
             align-items: center;
             justify-content: center;
+            overflow: hidden;
         }
 
-        ::selection {
-            background: var(--color-accent);
-            color: #fff;
+        /* Ambient background glow */
+        body::before {
+            content: '';
+            position: fixed;
+            top: -40%;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 600px;
+            height: 600px;
+            background: radial-gradient(circle, var(--accent-glow) 0%, transparent 70%);
+            opacity: 0.3;
+            pointer-events: none;
+            animation: breathe 8s ease-in-out infinite;
         }
 
-        .card {
-            width: 100%;
-            max-width: 380px;
-            padding: 40px 36px;
-            background: var(--bg-subtle);
-            border: 1px solid var(--border);
-            border-radius: 12px;
-            margin: 24px;
+        @keyframes breathe {
+            0%, 100% { opacity: 0.2; transform: translateX(-50%) scale(1); }
+            50% { opacity: 0.35; transform: translateX(-50%) scale(1.08); }
         }
 
-        .logo {
-            font-size: 24px;
-            font-weight: 600;
-            color: var(--text-primary);
-            letter-spacing: -0.5px;
-            margin-bottom: 6px;
-            text-align: center;
-        }
+        ::selection { background: var(--accent); color: var(--surface-0); }
 
-        .logo span {
-            color: var(--color-accent);
-        }
+        .wizard { width: 100%; max-width: 440px; padding: 24px; }
 
-        .subtitle {
+        /* ---- Header / Logo ---- */
+        .header { text-align: center; margin-bottom: 24px; }
+        .header h1 {
+            font-family: var(--font-mono);
+            font-size: 26px;
+            font-weight: 300;
+            letter-spacing: -0.02em;
+            color: var(--text-1);
+        }
+        .header h1 span {
+            color: var(--accent);
+            text-shadow: 0 0 20px var(--accent-glow);
+        }
+        .header .subtitle {
             font-size: 13px;
-            color: var(--text-muted);
-            text-align: center;
-            margin-bottom: 32px;
+            color: var(--text-3);
+            margin-top: 6px;
+            letter-spacing: 0.02em;
         }
 
+        /* ---- Step dots ---- */
+        .steps { display: flex; justify-content: center; gap: 8px; margin-bottom: 24px; }
+        .dot {
+            width: 10px; height: 10px; border-radius: 50%; background: var(--border);
+            transition: background 0.3s, box-shadow 0.3s;
+        }
+        .dot.active { background: var(--accent); box-shadow: 0 0 8px var(--accent-glow); }
+        .dot.done { background: #009e80; }
+
+        /* ---- Card ---- */
+        .card {
+            background: var(--surface-1);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 36px 32px;
+            position: relative;
+            box-shadow:
+                0 0 0 1px rgba(0, 212, 170, 0.03),
+                0 24px 48px -12px rgba(0, 0, 0, 0.5);
+        }
+
+        /* Card bottom flourish */
+        .card::after {
+            content: '';
+            position: absolute;
+            bottom: -1px;
+            left: 24px;
+            right: 24px;
+            height: 1px;
+            background: linear-gradient(90deg, transparent, var(--accent-glow), transparent);
+            opacity: 0.5;
+        }
+
+        .step { display: none; }
+        .step.active { display: block; }
+
+        .card h2 { font-size: 18px; font-weight: 500; color: var(--text-1); margin-bottom: 2px; }
+        .card .desc { font-size: 13px; color: var(--text-3); margin-bottom: 24px; letter-spacing: 0.02em; }
+
+        /* ---- Form ---- */
         .form-group {
-            margin-bottom: 18px;
+            margin-bottom: 20px;
+            position: relative;
         }
 
-        label {
+        .form-group label {
             display: block;
-            font-size: 12px;
+            font-family: var(--font-mono);
+            font-size: 11px;
+            font-weight: 500;
             text-transform: uppercase;
-            letter-spacing: 0.5px;
-            color: var(--text-secondary);
+            letter-spacing: 0.08em;
+            color: var(--text-3);
             margin-bottom: 8px;
         }
 
-        input {
+        .form-group input {
             width: 100%;
-            background: #111;
-            border: 1px solid var(--border);
-            border-radius: 8px;
-            padding: 12px 14px;
-            font-size: 15px;
-            font-family: var(--font-sans);
-            color: var(--text-primary);
-            outline: none;
-            transition: border-color 0.15s ease;
-        }
-
-        input:focus {
-            border-color: var(--color-accent);
-        }
-
-        input::placeholder {
-            color: var(--text-muted);
-        }
-
-        button[type="submit"] {
-            width: 100%;
-            margin-top: 8px;
-            padding: 12px 14px;
-            background: var(--color-accent);
+            background: transparent;
             border: none;
-            border-radius: 8px;
+            border-bottom: 1.5px solid var(--border);
+            border-radius: 0;
+            padding: 10px 0;
             font-size: 15px;
-            font-family: var(--font-sans);
-            font-weight: 500;
-            color: #fff;
-            cursor: pointer;
-            transition: background 0.15s ease, opacity 0.15s ease;
+            font-family: var(--font-body);
+            color: var(--text-1);
+            outline: none;
+            transition: border-color 0.25s ease;
         }
 
-        button[type="submit"]:hover:not(:disabled) {
-            background: var(--color-accent-hover);
+        .form-group input:focus {
+            border-bottom-color: var(--accent);
         }
 
-        button[type="submit"]:disabled {
-            opacity: 0.55;
-            cursor: not-allowed;
+        .form-group input::placeholder {
+            color: var(--text-3);
+            font-weight: 300;
         }
 
-        .error-message {
-            margin-top: 16px;
-            padding: 10px 14px;
-            background: rgba(248, 113, 113, 0.08);
-            border: 1px solid rgba(248, 113, 113, 0.25);
+        /* Focus indicator line */
+        .form-group .focus-line {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            width: 0;
+            height: 1.5px;
+            background: var(--accent);
+            transition: width 0.3s ease;
+            box-shadow: 0 0 8px var(--accent-glow);
+        }
+
+        .form-group input:focus ~ .focus-line {
+            width: 100%;
+        }
+
+        /* ---- Info rows ---- */
+        .info-row {
+            display: flex; justify-content: space-between; align-items: center;
+            padding: 10px 14px; background: var(--surface-0); border-radius: 8px; margin-bottom: 6px;
+        }
+        .info-row .label { font-size: 13px; color: var(--text-3); }
+        .info-row .value { font-size: 14px; font-weight: 500; color: var(--text-1); font-family: var(--font-mono); }
+
+        /* ---- Tip ---- */
+        .tip {
+            background: var(--accent-dim);
+            border: 1px solid var(--accent-glow);
             border-radius: 8px;
-            font-size: 13px;
-            color: var(--color-red);
-            display: none;
-        }
-
-        .error-message.visible {
-            display: block;
-        }
-
-        .note {
+            padding: 12px 14px;
             margin-top: 16px;
-            font-size: 12px;
-            color: #444;
-            text-align: center;
+            font-size: 13px;
+            color: var(--accent);
+            line-height: 1.5;
         }
+        .tip strong { color: var(--accent-hover); }
+
+        /* ---- Done icon ---- */
+        .done-icon {
+            width: 56px; height: 56px; border-radius: 50%;
+            background: var(--accent-dim); display: flex;
+            align-items: center; justify-content: center;
+            margin: 0 auto 16px; font-size: 24px; color: var(--accent);
+        }
+        .done-text { text-align: center; margin-bottom: 20px; }
+        .done-text p { color: var(--text-3); font-size: 14px; margin-top: 4px; }
+
+        /* ---- Buttons ---- */
+        .btn-row { display: flex; justify-content: space-between; align-items: center; margin-top: 24px; gap: 10px; }
+        .btn {
+            padding: 12px 20px;
+            border-radius: 10px;
+            font-size: 14px;
+            font-weight: 500;
+            font-family: var(--font-mono);
+            cursor: pointer;
+            border: none;
+            transition: all 0.2s ease;
+            letter-spacing: 0.02em;
+        }
+        .btn-primary {
+            background: var(--accent);
+            color: var(--surface-0);
+            flex: 1;
+        }
+        .btn-primary:hover:not(:disabled) {
+            background: var(--accent-hover);
+            box-shadow: 0 0 24px var(--accent-glow);
+            transform: translateY(-1px);
+        }
+        .btn-primary:active:not(:disabled) { transform: translateY(0); }
+        .btn-primary:disabled { opacity: 0.45; cursor: not-allowed; }
+
+        .btn-back {
+            background: transparent;
+            color: var(--text-3);
+            border: 1px solid var(--border);
+        }
+        .btn-back:hover {
+            border-color: var(--accent);
+            color: var(--text-2);
+        }
+
+        .btn-skip {
+            background: transparent;
+            color: var(--text-3);
+            font-size: 13px;
+            padding: 12px 12px;
+        }
+        .btn-skip:hover { color: var(--text-2); }
+
+        /* ---- Error ---- */
+        .error {
+            margin-top: 18px;
+            padding: 11px 14px;
+            background: var(--error-dim);
+            border-left: 3px solid var(--error);
+            border-radius: 0 8px 8px 0;
+            font-size: 13px;
+            color: var(--error);
+            display: none;
+            animation: slideIn 0.2s ease;
+        }
+        .error.visible { display: block; }
+
+        @keyframes slideIn {
+            from { opacity: 0; transform: translateX(-8px); }
+            to { opacity: 1; transform: translateX(0); }
+        }
+
+        .note { margin-top: 14px; font-size: 12px; color: var(--text-3); text-align: center; }
     </style>
 </head>
 <body>
-    <div class="card">
-        <div class="logo"><span>oxi</span>-dns</div>
-        <div class="subtitle">Create your admin account to get started</div>
+    <div class="wizard">
+        <div class="header">
+            <h1><span>oxi</span>-dns</h1>
+            <div class="subtitle">Initial Setup</div>
+        </div>
 
-        <form id="setup-form" novalidate>
-            <div class="form-group">
-                <label for="username">Username</label>
-                <input
-                    type="text"
-                    id="username"
-                    name="username"
-                    autocomplete="username"
-                    required
-                    placeholder="admin"
-                />
-            </div>
-            <div class="form-group">
-                <label for="password">Password</label>
-                <input
-                    type="password"
-                    id="password"
-                    name="password"
-                    autocomplete="new-password"
-                    required
-                    minlength="8"
-                    placeholder="••••••••"
-                />
-            </div>
-            <div class="form-group">
-                <label for="confirm-password">Confirm Password</label>
-                <input
-                    type="password"
-                    id="confirm-password"
-                    name="confirm-password"
-                    autocomplete="new-password"
-                    required
-                    minlength="8"
-                    placeholder="••••••••"
-                />
-            </div>
-            <button type="submit" id="submit-btn">Create Account &amp; Continue</button>
-            <div class="error-message" id="error-message"></div>
-        </form>
+        <div class="steps">
+            <div class="dot" id="dot-1"></div>
+            <div class="dot" id="dot-2"></div>
+            <div class="dot" id="dot-3"></div>
+        </div>
 
-        <p class="note">This account will have full admin permissions.</p>
+        <div class="card">
+            <div class="step" id="step-1">
+                <h2>Create Admin Account</h2>
+                <p class="desc">This account has full access to all settings.</p>
+                <form id="setup-form" novalidate>
+                    <div class="form-group">
+                        <label for="username">Username</label>
+                        <input type="text" id="username" autocomplete="username" required placeholder="admin">
+                        <div class="focus-line"></div>
+                    </div>
+                    <div class="form-group">
+                        <label for="password">Password</label>
+                        <input type="password" id="password" autocomplete="new-password" required minlength="8" placeholder="Minimum 8 characters">
+                        <div class="focus-line"></div>
+                    </div>
+                    <div class="form-group">
+                        <label for="confirm-password">Confirm Password</label>
+                        <input type="password" id="confirm-password" autocomplete="new-password" required minlength="8" placeholder="Re-enter password">
+                        <div class="focus-line"></div>
+                    </div>
+                    <div class="btn-row">
+                        <div></div>
+                        <button type="submit" class="btn btn-primary" id="submit-btn">Create Account &amp; Continue</button>
+                    </div>
+                    <div class="error" id="error-msg"></div>
+                </form>
+                <p class="note">This account will have full admin permissions.</p>
+            </div>
+
+            <div class="step" id="step-2">
+                <h2>Your Configuration</h2>
+                <p class="desc">Configured during installation. Change these from the dashboard later.</p>
+                <div id="config-info">
+                    <div class="info-row"><span class="label">DNS Server</span><span class="value" id="info-dns">—</span></div>
+                    <div class="info-row"><span class="label">Web Dashboard</span><span class="value" id="info-web">—</span></div>
+                    <div class="info-row"><span class="label">Server IP</span><span class="value" id="info-ip">—</span></div>
+                </div>
+                <div class="tip">
+                    <strong>Next step:</strong> Point your devices' DNS to <strong id="tip-ip">—</strong> to start blocking ads.
+                </div>
+                <div class="btn-row">
+                    <div></div>
+                    <button class="btn btn-skip" onclick="window.location.href='/'">Skip to dashboard</button>
+                    <button class="btn btn-primary" onclick="goStep(3)">Next</button>
+                </div>
+            </div>
+
+            <div class="step" id="step-3">
+                <div class="done-icon">&#10003;</div>
+                <div class="done-text">
+                    <h2>You're All Set!</h2>
+                    <p>Oxi-DNS is running and ready to protect your network.</p>
+                </div>
+                <div id="summary-info">
+                    <div class="info-row"><span class="label">Admin</span><span class="value" id="sum-user">—</span></div>
+                    <div class="info-row"><span class="label">DNS</span><span class="value" id="sum-dns">—</span></div>
+                    <div class="info-row"><span class="label">Dashboard</span><span class="value" id="sum-dash">—</span></div>
+                </div>
+                <div class="btn-row">
+                    <button class="btn btn-back" onclick="goStep(2)">Back</button>
+                    <button class="btn btn-primary" onclick="window.location.href='/'">Open Dashboard</button>
+                </div>
+            </div>
+        </div>
     </div>
 
     <script>
+        let currentStep = 1;
+        let setupInfo = {};
+        let adminUsername = '';
+
+        function goStep(n) {
+            currentStep = n;
+            document.querySelectorAll('.step').forEach(s => s.classList.remove('active'));
+            document.getElementById('step-' + n).classList.add('active');
+            document.querySelectorAll('.dot').forEach((d, i) => {
+                d.className = 'dot';
+                if (i + 1 < n) d.classList.add('done');
+                if (i + 1 === n) d.classList.add('active');
+            });
+
+            if (n === 2) loadSetupInfo();
+            if (n === 3) populateSummary();
+        }
+
+        async function loadSetupInfo() {
+            try {
+                const res = await fetch('/api/system/setup-info');
+                if (res.ok) {
+                    setupInfo = await res.json();
+                    document.getElementById('info-dns').textContent = setupInfo.dns_listen || '—';
+                    document.getElementById('info-web').textContent = setupInfo.web_listen || '—';
+                    document.getElementById('info-ip').textContent = setupInfo.server_ip || '—';
+                    document.getElementById('tip-ip').textContent = setupInfo.server_ip || '—';
+                }
+            } catch (_) {}
+        }
+
+        function populateSummary() {
+            document.getElementById('sum-user').textContent = adminUsername || '—';
+            document.getElementById('sum-dns').textContent = setupInfo.dns_listen || '—';
+            const ip = setupInfo.server_ip || window.location.hostname;
+            const port = (setupInfo.web_listen || '').split(':').pop() || '9853';
+            document.getElementById('sum-dash').textContent = 'http://' + ip + ':' + port;
+        }
+
+        const errorEl = document.getElementById('error-msg');
+        function showError(msg) { errorEl.textContent = msg; errorEl.classList.add('visible'); }
+        function clearError() { errorEl.textContent = ''; errorEl.classList.remove('visible'); }
+
         const form = document.getElementById('setup-form');
         const submitBtn = document.getElementById('submit-btn');
-        const errorMsg = document.getElementById('error-message');
-
-        function showError(msg) {
-            errorMsg.textContent = msg;
-            errorMsg.classList.add('visible');
-        }
-
-        function clearError() {
-            errorMsg.textContent = '';
-            errorMsg.classList.remove('visible');
-        }
 
         form.addEventListener('submit', async (e) => {
             e.preventDefault();
@@ -227,23 +413,12 @@
             const password = document.getElementById('password').value;
             const confirm = document.getElementById('confirm-password').value;
 
-            if (!username) {
-                showError('Please enter a username.');
-                return;
-            }
-
-            if (password.length < 8) {
-                showError('Password must be at least 8 characters.');
-                return;
-            }
-
-            if (password !== confirm) {
-                showError('Passwords do not match.');
-                return;
-            }
+            if (!username) { showError('Please enter a username.'); return; }
+            if (password.length < 8) { showError('Password must be at least 8 characters.'); return; }
+            if (password !== confirm) { showError('Passwords do not match.'); return; }
 
             submitBtn.disabled = true;
-            submitBtn.textContent = 'Creating account…';
+            submitBtn.textContent = 'Creating account\u2026';
 
             try {
                 const res = await fetch('/api/auth/setup', {
@@ -251,25 +426,22 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ username, password }),
                 });
-
                 if (res.ok) {
-                    window.location.href = '/';
+                    adminUsername = username;
+                    goStep(2);
                 } else {
                     let msg = 'Failed to create account. Please try again.';
-                    try {
-                        const data = await res.json();
-                        if (data && data.error) msg = data.error;
-                    } catch (_) {}
+                    try { const d = await res.json(); if (d && d.error) msg = d.error; } catch (_) {}
                     showError(msg);
-                    submitBtn.disabled = false;
-                    submitBtn.textContent = 'Create Account & Continue';
                 }
-            } catch (err) {
+            } catch (_) {
                 showError('Unable to reach the server. Please try again.');
-                submitBtn.disabled = false;
-                submitBtn.textContent = 'Create Account & Continue';
             }
+            submitBtn.disabled = false;
+            submitBtn.textContent = 'Create Account & Continue';
         });
+
+        goStep(1);
     </script>
 </body>
 </html>

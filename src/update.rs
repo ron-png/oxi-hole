@@ -87,7 +87,7 @@ impl UpdateChecker {
     }
 
     /// Return cached version info if still fresh, otherwise fetch from GitHub.
-    pub async fn check(&self, force: bool) -> VersionInfo {
+    pub async fn check(&self, force: bool, channel: &str) -> VersionInfo {
         {
             let inner = self.inner.read().await;
             if !force {
@@ -100,7 +100,7 @@ impl UpdateChecker {
         }
 
         let now = Utc::now().to_rfc3339();
-        let info = match fetch_latest_release().await {
+        let info = match fetch_latest_release(channel).await {
             Ok(release) => {
                 let latest = clean_version(&release.tag_name);
                 let update_available = version_newer(&latest, VERSION);
@@ -136,7 +136,7 @@ impl UpdateChecker {
     /// Download the new binary to a temp path without replacing the current binary.
     /// Returns (temp_path, version_string) on success.
     pub async fn download_update(&self) -> Result<(std::path::PathBuf, String), String> {
-        let info = self.check(true).await;
+        let info = self.check(true, "stable").await;
         let download_url = info
             .download_url
             .ok_or("No download URL available for this platform")?;
@@ -190,7 +190,7 @@ pub async fn perform_robust_update(
         s.last_attempt = Some(std::time::Instant::now());
     }
 
-    let info = update_checker.check(true).await;
+    let info = update_checker.check(true, "stable").await;
     if !info.update_available {
         let mut s = update_status.write().await;
         s.state = UpdateState::Idle;
@@ -439,21 +439,38 @@ fn extract_binary_from_tar_gz(data: &[u8]) -> Result<Vec<u8>, String> {
     Err("No file found in archive".to_string())
 }
 
-async fn fetch_latest_release() -> anyhow::Result<GitHubRelease> {
-    let url = format!(
-        "https://api.github.com/repos/{}/{}/releases/latest",
-        REPO_OWNER, REPO_NAME
-    );
-    let client = reqwest::Client::new();
-    let release: GitHubRelease = client
-        .get(&url)
-        .header("User-Agent", format!("oxi-dns/{}", VERSION))
-        .send()
-        .await?
-        .error_for_status()?
-        .json()
-        .await?;
-    Ok(release)
+async fn fetch_latest_release(channel: &str) -> anyhow::Result<GitHubRelease> {
+    if channel == "development" {
+        let url = format!(
+            "https://api.github.com/repos/{}/{}/releases",
+            REPO_OWNER, REPO_NAME
+        );
+        let client = reqwest::Client::new();
+        let releases: Vec<GitHubRelease> = client
+            .get(&url)
+            .header("User-Agent", format!("oxi-dns/{}", VERSION))
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
+        releases.into_iter().next().ok_or_else(|| anyhow::anyhow!("No releases found"))
+    } else {
+        let url = format!(
+            "https://api.github.com/repos/{}/{}/releases/latest",
+            REPO_OWNER, REPO_NAME
+        );
+        let client = reqwest::Client::new();
+        let release: GitHubRelease = client
+            .get(&url)
+            .header("User-Agent", format!("oxi-dns/{}", VERSION))
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
+        Ok(release)
+    }
 }
 
 /// Extract version from a release tag, stripping prefix and non-version suffixes.

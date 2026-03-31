@@ -77,6 +77,9 @@ pub struct WebConfig {
     /// Addresses to listen on for the web admin UI
     #[serde(default = "default_web_listen", deserialize_with = "string_or_vec")]
     pub listen: Vec<String>,
+    /// Addresses to listen on for the HTTPS web admin UI
+    #[serde(default, deserialize_with = "string_or_vec_opt")]
+    pub https_listen: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -122,6 +125,9 @@ pub struct SystemConfig {
     /// Whether to include AAAA (IPv6) records in DNS responses.
     #[serde(default = "default_true")]
     pub ipv6_enabled: bool,
+    /// Release channel for updates (e.g. "stable", "beta").
+    #[serde(default = "default_release_channel")]
+    pub release_channel: String,
 }
 
 impl Default for SystemConfig {
@@ -129,28 +135,35 @@ impl Default for SystemConfig {
         Self {
             auto_update: false,
             ipv6_enabled: true,
+            release_channel: default_release_channel(),
         }
     }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LogConfig {
-    /// How many days to retain query logs (1-90)
-    #[serde(default = "default_log_retention_days")]
-    pub retention_days: u32,
+    #[serde(default = "default_query_log_retention", alias = "retention_days")]
+    pub query_log_retention_days: u32,
+    #[serde(default = "default_stats_retention")]
+    pub stats_retention_days: u32,
     /// Whether to anonymize client IPs in the query log
     #[serde(default)]
     pub anonymize_client_ip: bool,
 }
 
-fn default_log_retention_days() -> u32 {
+fn default_query_log_retention() -> u32 {
+    7
+}
+
+fn default_stats_retention() -> u32 {
     90
 }
 
 impl Default for LogConfig {
     fn default() -> Self {
         Self {
-            retention_days: default_log_retention_days(),
+            query_log_retention_days: default_query_log_retention(),
+            stats_retention_days: default_stats_retention(),
             anonymize_client_ip: false,
         }
     }
@@ -245,6 +258,7 @@ fn default_dns() -> DnsConfig {
 fn default_web() -> WebConfig {
     WebConfig {
         listen: default_web_listen(),
+        https_listen: None,
     }
 }
 
@@ -253,7 +267,7 @@ fn default_dns_listen() -> Vec<String> {
 }
 
 fn default_web_listen() -> Vec<String> {
-    vec!["0.0.0.0:8080".to_string(), "[::]:8080".to_string()]
+    vec!["0.0.0.0:9853".to_string(), "[::]:9853".to_string()]
 }
 
 fn default_upstreams() -> Vec<String> {
@@ -273,6 +287,10 @@ fn default_cache_enabled() -> bool {
 
 fn default_true() -> bool {
     true
+}
+
+fn default_release_channel() -> String {
+    "stable".to_string()
 }
 
 fn default_update_interval() -> u64 {

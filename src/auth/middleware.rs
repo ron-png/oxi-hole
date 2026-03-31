@@ -18,7 +18,7 @@ pub async fn auth_middleware(
 
     // Check if setup is needed — redirect everything to /setup except setup routes
     if auth.needs_setup().await {
-        if path == "/setup" || path == "/api/auth/setup" {
+        if path == "/setup" || path == "/api/auth/setup" || path == "/api/system/setup-info" {
             return next.run(request).await;
         }
         if path.starts_with("/api/") {
