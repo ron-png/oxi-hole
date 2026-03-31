@@ -48,8 +48,6 @@ impl From<anyhow::Error> for ParseError {
     }
 }
 
-
-
 /// Parse PEM certificate data from one or two byte slices.
 ///
 /// - `cert_data`: PEM data that must contain at least one certificate.
@@ -78,9 +76,8 @@ pub fn parse_pem(
         )));
     }
 
-    let key = key_der.ok_or_else(|| {
-        ParseError::Other(anyhow::anyhow!("No private key found in PEM data"))
-    })?;
+    let key = key_der
+        .ok_or_else(|| ParseError::Other(anyhow::anyhow!("No private key found in PEM data")))?;
 
     let (subject, issuer, not_after, self_signed) = extract_cert_info(&certs[0])?;
 
@@ -159,8 +156,8 @@ fn parse_pem_items(
 /// - `password`: Password for the bundle. If `None` and the bundle is encrypted,
 ///   returns `ParseError::PasswordRequired`.
 pub fn parse_pkcs12(data: &[u8], password: Option<&str>) -> Result<ParsedCertificate, ParseError> {
-    let pfx = p12::PFX::parse(data)
-        .map_err(|e| anyhow::anyhow!("Failed to parse PKCS12: {:?}", e))?;
+    let pfx =
+        p12::PFX::parse(data).map_err(|e| anyhow::anyhow!("Failed to parse PKCS12: {:?}", e))?;
 
     let pw = password.unwrap_or("");
 
@@ -214,7 +211,11 @@ fn extract_cert_info(der: &[u8]) -> Result<(String, String, String, bool), Parse
 
     let subject = cert.subject().to_string();
     let issuer = cert.issuer().to_string();
-    let not_after = cert.validity().not_after.to_rfc2822().unwrap_or_else(|_| cert.validity().not_after.to_string());
+    let not_after = cert
+        .validity()
+        .not_after
+        .to_rfc2822()
+        .unwrap_or_else(|_| cert.validity().not_after.to_string());
     let self_signed = cert.subject() == cert.issuer();
 
     Ok((subject, issuer, not_after, self_signed))
@@ -348,7 +349,6 @@ mod tests {
             _ => panic!("Expected Other error"),
         }
     }
-
 
     #[test]
     fn extract_cert_info_works() {

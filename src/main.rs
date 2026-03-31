@@ -5,17 +5,17 @@ compile_error!(
 
 mod auth;
 mod blocklist;
+mod cert_parser;
 mod config;
 mod dns;
 mod features;
+mod persistent_stats;
 mod query_log;
+mod reconfigure;
 mod stats;
 mod tls;
 mod update;
 mod web;
-mod reconfigure;
-mod cert_parser;
-mod persistent_stats;
 
 use config::Config;
 use std::path::PathBuf;
@@ -235,14 +235,14 @@ async fn main() -> anyhow::Result<()> {
     let anonymize_ip = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(
         config.log.anonymize_client_ip,
     ));
-    let log_retention_days =
-        std::sync::Arc::new(tokio::sync::RwLock::new(config.log.query_log_retention_days));
+    let log_retention_days = std::sync::Arc::new(tokio::sync::RwLock::new(
+        config.log.query_log_retention_days,
+    ));
     let ipv6_enabled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(
         config.system.ipv6_enabled,
     ));
-    let stats_retention_days = std::sync::Arc::new(tokio::sync::RwLock::new(
-        config.log.stats_retention_days,
-    ));
+    let stats_retention_days =
+        std::sync::Arc::new(tokio::sync::RwLock::new(config.log.stats_retention_days));
 
     // Start DNS server (all protocols)
     let upstream_for_web = upstream.clone();
@@ -509,7 +509,11 @@ async fn main() -> anyhow::Result<()> {
                     .arg("--takeover")
                     .arg("--ready-file")
                     .arg(ready_path.to_str().unwrap())
-                    .arg(config_path_for_restart.to_str().unwrap_or("/etc/oxi-dns/config.toml"))
+                    .arg(
+                        config_path_for_restart
+                            .to_str()
+                            .unwrap_or("/etc/oxi-dns/config.toml"),
+                    )
                     .spawn()
                 {
                     Ok(c) => c,

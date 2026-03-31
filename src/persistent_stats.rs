@@ -187,11 +187,7 @@ impl PersistentStats {
     }
 
     /// Return hourly aggregates for a time range (ISO 8601 strings).
-    pub async fn get_hourly_stats(
-        &self,
-        from: &str,
-        to: &str,
-    ) -> anyhow::Result<Vec<HourlyStat>> {
+    pub async fn get_hourly_stats(&self, from: &str, to: &str) -> anyhow::Result<Vec<HourlyStat>> {
         let from = from.to_string();
         let to = to.to_string();
         let conn = self.conn.clone();
@@ -342,7 +338,6 @@ impl PersistentStats {
         }
         Ok(deleted)
     }
-
 }
 
 #[cfg(test)]

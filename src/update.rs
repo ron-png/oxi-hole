@@ -454,7 +454,10 @@ async fn fetch_latest_release(channel: &str) -> anyhow::Result<GitHubRelease> {
             .error_for_status()?
             .json()
             .await?;
-        releases.into_iter().next().ok_or_else(|| anyhow::anyhow!("No releases found"))
+        releases
+            .into_iter()
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("No releases found"))
     } else {
         let url = format!(
             "https://api.github.com/repos/{}/{}/releases/latest",

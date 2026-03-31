@@ -367,9 +367,15 @@ pub async fn run_web_server(
         .route("/api/upstreams/add", post(api_add_upstream))
         .route("/api/upstreams/remove", post(api_remove_upstream))
         // Network configuration
-        .route("/api/system/network", get(api_system_network).post(api_update_network))
+        .route(
+            "/api/system/network",
+            get(api_system_network).post(api_update_network),
+        )
         // System settings
-        .route("/api/system/release-channel", get(api_get_release_channel).post(api_set_release_channel))
+        .route(
+            "/api/system/release-channel",
+            get(api_get_release_channel).post(api_set_release_channel),
+        )
         .route("/api/system/auto-update", get(api_get_auto_update))
         .route("/api/system/auto-update", post(api_set_auto_update))
         .route("/api/system/ipv6", get(api_get_ipv6))
@@ -424,7 +430,8 @@ pub async fn run_web_server(
         let https_addrs = https_listen.unwrap();
 
         // HTTPS app: full router + IsHttps marker
-        let https_app = app.clone()
+        let https_app = app
+            .clone()
             .layer(axum::middleware::from_fn(mark_https_middleware));
 
         for addr in https_addrs {
@@ -436,11 +443,8 @@ pub async fn run_web_server(
             } else {
                 socket2::Domain::IPV6
             };
-            let socket = socket2::Socket::new(
-                domain,
-                socket2::Type::STREAM,
-                Some(socket2::Protocol::TCP),
-            )?;
+            let socket =
+                socket2::Socket::new(domain, socket2::Type::STREAM, Some(socket2::Protocol::TCP))?;
             socket.set_reuse_port(true)?;
             socket.set_nonblocking(true)?;
             socket.bind(&sock_addr.into())?;
@@ -469,15 +473,17 @@ pub async fn run_web_server(
                             }
                         };
                         let io = hyper_util::rt::TokioIo::new(tls_stream);
-                        let service =
-                            hyper::service::service_fn(move |req: hyper::Request<hyper::body::Incoming>| {
+                        let service = hyper::service::service_fn(
+                            move |req: hyper::Request<hyper::body::Incoming>| {
                                 let mut app = app.clone();
                                 async move { app.call(req).await }
-                            });
-                        if let Err(e) =
-                            hyper_util::server::conn::auto::Builder::new(hyper_util::rt::TokioExecutor::new())
-                                .serve_connection(io, service)
-                                .await
+                            },
+                        );
+                        if let Err(e) = hyper_util::server::conn::auto::Builder::new(
+                            hyper_util::rt::TokioExecutor::new(),
+                        )
+                        .serve_connection(io, service)
+                        .await
                         {
                             tracing::debug!("HTTPS connection error: {}", e);
                         }
@@ -516,11 +522,8 @@ pub async fn run_web_server(
             } else {
                 socket2::Domain::IPV6
             };
-            let socket = socket2::Socket::new(
-                domain,
-                socket2::Type::STREAM,
-                Some(socket2::Protocol::TCP),
-            )?;
+            let socket =
+                socket2::Socket::new(domain, socket2::Type::STREAM, Some(socket2::Protocol::TCP))?;
             socket.set_reuse_port(true)?;
             socket.set_nonblocking(true)?;
             socket.bind(&sock_addr.into())?;
@@ -544,11 +547,8 @@ pub async fn run_web_server(
             } else {
                 socket2::Domain::IPV6
             };
-            let socket = socket2::Socket::new(
-                domain,
-                socket2::Type::STREAM,
-                Some(socket2::Protocol::TCP),
-            )?;
+            let socket =
+                socket2::Socket::new(domain, socket2::Type::STREAM, Some(socket2::Protocol::TCP))?;
             socket.set_reuse_port(true)?;
             socket.set_nonblocking(true)?;
             socket.bind(&sock_addr.into())?;
@@ -597,32 +597,32 @@ fn require_permission(user: &AuthenticatedUser, perm: Permission) -> Result<(), 
 
 // ==================== Auth Pages ====================
 
-async fn login_page(
-    nonce: Option<axum::Extension<CspNonce>>,
-) -> Html<String> {
+async fn login_page(nonce: Option<axum::Extension<CspNonce>>) -> Html<String> {
     let html = include_str!("login.html");
     let nonce_val = nonce.map(|n| n.0 .0.clone()).unwrap_or_default();
     Html(html.replace("<script>", &format!("<script nonce=\"{}\">", nonce_val)))
 }
 
-async fn setup_page(
-    nonce: Option<axum::Extension<CspNonce>>,
-) -> Html<String> {
+async fn setup_page(nonce: Option<axum::Extension<CspNonce>>) -> Html<String> {
     let html = include_str!("setup.html");
     let nonce_val = nonce.map(|n| n.0 .0.clone()).unwrap_or_default();
     Html(html.replace("<script>", &format!("<script nonce=\"{}\">", nonce_val)))
 }
 
-async fn api_setup_info(
-    State(state): State<AppState>,
-) -> Json<serde_json::Value> {
+async fn api_setup_info(State(state): State<AppState>) -> Json<serde_json::Value> {
     let config = Config::load(&state.config_path).unwrap_or_default();
 
-    let dns_listen = config.dns.listen.first()
+    let dns_listen = config
+        .dns
+        .listen
+        .first()
         .cloned()
         .unwrap_or_else(|| "0.0.0.0:53".to_string());
 
-    let web_listen = config.web.listen.first()
+    let web_listen = config
+        .web
+        .listen
+        .first()
         .cloned()
         .unwrap_or_else(|| "0.0.0.0:9853".to_string());
 
@@ -675,7 +675,11 @@ async fn api_update_network(
     let mut config = match Config::load(&state.config_path) {
         Ok(c) => c,
         Err(e) => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("{}", e)}))).into_response();
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": format!("{}", e)})),
+            )
+                .into_response();
         }
     };
 
@@ -705,7 +709,11 @@ async fn api_update_network(
     }
 
     if let Err(e) = config.save(&state.config_path) {
-        return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("{}", e)}))).into_response();
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": format!("{}", e)})),
+        )
+            .into_response();
     }
 
     let _ = state.restart_signal.send(true);
@@ -791,7 +799,8 @@ async fn api_auth_setup(
         return (
             StatusCode::TOO_MANY_REQUESTS,
             Json(serde_json::json!({"error": "Too many attempts. Please try again later."})),
-        ).into_response();
+        )
+            .into_response();
     }
 
     let all_permissions: Vec<Permission> = Permission::ALL.to_vec();
@@ -934,7 +943,8 @@ async fn api_create_user(
         return Err((
             StatusCode::TOO_MANY_REQUESTS,
             Json(serde_json::json!({"error": "Too many requests. Please try again later."})),
-        ).into_response());
+        )
+            .into_response());
     }
 
     require_permission(&user, Permission::ManageUsers)?;
@@ -1072,7 +1082,8 @@ async fn api_reset_password(
         return Err((
             StatusCode::TOO_MANY_REQUESTS,
             Json(serde_json::json!({"error": "Too many requests. Please try again later."})),
-        ).into_response());
+        )
+            .into_response());
     }
 
     require_permission(&user, Permission::ManageUsers)?;
@@ -1100,7 +1111,8 @@ async fn api_change_password(
         return Err((
             StatusCode::TOO_MANY_REQUESTS,
             Json(serde_json::json!({"error": "Too many attempts. Please try again later."})),
-        ).into_response());
+        )
+            .into_response());
     }
 
     if !state
@@ -1163,7 +1175,8 @@ async fn api_create_token(
         return Err((
             StatusCode::TOO_MANY_REQUESTS,
             Json(serde_json::json!({"error": "Too many requests. Please try again later."})),
-        ).into_response());
+        )
+            .into_response());
     }
 
     // Cannot grant permissions you don't have
@@ -1226,9 +1239,7 @@ async fn api_revoke_token(
 
 // ==================== Dashboard ====================
 
-async fn dashboard(
-    nonce: Option<axum::Extension<CspNonce>>,
-) -> Html<String> {
+async fn dashboard(nonce: Option<axum::Extension<CspNonce>>) -> Html<String> {
     let html = include_str!("dashboard.html");
     let nonce_val = nonce.map(|n| n.0 .0.clone()).unwrap_or_default();
     Html(html.replace("<script>", &format!("<script nonce=\"{}\">", nonce_val)))
@@ -2020,7 +2031,8 @@ async fn api_tls_upload(
         return (
             StatusCode::TOO_MANY_REQUESTS,
             Json(serde_json::json!({"error": "Too many requests. Please try again later."})),
-        ).into_response();
+        )
+            .into_response();
     }
 
     if !user.permissions.contains(&Permission::ManageSystem) {
@@ -2212,15 +2224,22 @@ async fn api_stats_history(
     };
 
     let now = chrono::Utc::now();
-    let from = (now - chrono::Duration::hours(hours)).format("%Y-%m-%dT%H:00:00").to_string();
+    let from = (now - chrono::Duration::hours(hours))
+        .format("%Y-%m-%dT%H:00:00")
+        .to_string();
     let to = now.format("%Y-%m-%dT%H:00:00").to_string();
 
     match state.persistent_stats.get_hourly_stats(&from, &to).await {
         Ok(data) => Json(serde_json::json!({
             "period": period,
             "data": data,
-        })).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("{}", e)}))).into_response(),
+        }))
+        .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": format!("{}", e)})),
+        )
+            .into_response(),
     }
 }
 
@@ -2242,8 +2261,13 @@ async fn api_stats_top_domains(
             "days": days,
             "top_queried": data.top_queried,
             "top_blocked": data.top_blocked,
-        })).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("{}", e)}))).into_response(),
+        }))
+        .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": format!("{}", e)})),
+        )
+            .into_response(),
     }
 }
 
@@ -2264,7 +2288,12 @@ async fn api_stats_summary(
             "total_queries": data.total_queries,
             "blocked_queries": data.blocked_queries,
             "block_percentage": data.block_percentage,
-        })).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("{}", e)}))).into_response(),
+        }))
+        .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": format!("{}", e)})),
+        )
+            .into_response(),
     }
 }
