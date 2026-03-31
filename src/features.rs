@@ -201,7 +201,9 @@ impl FeatureManager {
                         warn!("Failed to load YouTube safe search rules: {}", e);
                         if feature_id == "youtube_safe_search" {
                             let mut features = self.features.write().await;
-                            if let Some(f) = features.iter_mut().find(|f| f.id == "youtube_safe_search") {
+                            if let Some(f) =
+                                features.iter_mut().find(|f| f.id == "youtube_safe_search")
+                            {
                                 f.enabled = false;
                             }
                         }
