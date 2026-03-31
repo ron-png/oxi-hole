@@ -105,6 +105,7 @@ Installs the binary to `/opt/oxi-dns/`, config to `/etc/oxi-dns/config.toml`, an
 | Flag | Description |
 |------|-------------|
 | `-c <channel>` | Release channel: `stable` (default) or `development` (pre-releases). `beta` and `edge` are accepted as aliases for `development`. |
+| `-V <version>` | Install a specific version (e.g. `v0.4.0.9-dev`). Skips version detection. |
 | `-r` | Reinstall — purge all files and install fresh |
 | `-U` | Update — download latest binary and restart service (preserves config) |
 | `-u` | Uninstall Oxi-DNS |
@@ -117,9 +118,16 @@ During a fresh install, the script interactively prompts for:
 - **Web dashboard port** (default 9853)
 - **DNS mode** (when systemd-resolved is detected): replace systemd-resolved or run alongside it on a different address/port
 
-Example — install from the development channel:
+Examples:
 ```bash
+# Install latest stable
+curl -sSL "https://raw.githubusercontent.com/ron-png/oxi-dns/main/scripts/install.sh" | sh
+
+# Install latest development (pre-release)
 curl -sSL "https://raw.githubusercontent.com/ron-png/oxi-dns/main/scripts/install.sh" | sh -s -- -c development
+
+# Install a specific version
+curl -sSL "https://raw.githubusercontent.com/ron-png/oxi-dns/main/scripts/install.sh" | sh -s -- -V v0.4.0.9-dev
 ```
 
 ### Docker / Podman
