@@ -4,7 +4,7 @@ A fast, memory-safe DNS sinkhole that blocks ads, trackers, and malware at the n
 
 Supports plain DNS (UDP), DNS-over-TLS (DoT), DNS-over-HTTPS (DoH), and DNS-over-QUIC (DoQ). Ships as a single static binary with a built-in web dashboard — no dependencies, no containers required.
 
-> **Early alpha** — under active development. Expect rough edges.
+> **Early alpha** — under active development. Some features are not tested yet. Expect rough edges.
 
 ## Why Oxi-DNS?
 
