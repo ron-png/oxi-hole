@@ -2,7 +2,7 @@
 
 # Oxi-DNS install script
 # Usage:
-#   curl -s -S -L "https://raw.githubusercontent.com/ron-png/oxi-dns/master/scripts/install.sh?v=$(date +%s)" | sh -s -- [options]
+#   curl -s -S -L "https://raw.githubusercontent.com/ron-png/oxi-dns/main/scripts/install.sh?v=$(date +%s)" | sh -s -- [options]
 #
 # Options:
 #   -r  Reinstall (purge all files and install fresh)
@@ -98,7 +98,7 @@ Options:
 Note: -r, -u, and -U are mutually exclusive.
 
 Examples:
-  Install:     curl -s -S -L "https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/master/scripts/install.sh?v=\$(date +%s)" | sh
+  Install:     curl -s -S -L "https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/main/scripts/install.sh?v=\$(date +%s)" | sh
   Update:      curl -s -S -L ... | sh -s -- -U
   Reinstall:   curl -s -S -L ... | sh -s -- -r
   Uninstall:   curl -s -S -L ... | sh -s -- -u
@@ -160,7 +160,7 @@ check_root() {
         else
             check_dependencies
             TMP_SCRIPT=$(mktemp)
-            download "https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/master/scripts/install.sh?v=$(date +%s)" "$TMP_SCRIPT"
+            download "https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/main/scripts/install.sh?v=$(date +%s)" "$TMP_SCRIPT"
             trap 'rm -f "$TMP_SCRIPT"' EXIT
             sudo sh "$TMP_SCRIPT" $ORIG_ARGS
             exit $?
@@ -487,7 +487,7 @@ do_install() {
     # Pre-download config before purging so all files are ready
     if [ "$REINSTALL" -eq 1 ]; then
         log_step "Pre-downloading configuration"
-        CONFIG_URL="https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/master/config.toml"
+        CONFIG_URL="https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/main/config.toml"
         download "$CONFIG_URL" "${TMPDIR}/config.toml"
         if [ ! -s "${TMPDIR}/config.toml" ]; then
             log_error "Failed to download default config from ${CONFIG_URL}"

@@ -95,7 +95,7 @@ Available at `http://<host>:9853`:
 ### Install Script
 
 ```bash
-curl -sSL "https://raw.githubusercontent.com/ron-png/oxi-dns/master/scripts/install.sh" | sh
+curl -sSL "https://raw.githubusercontent.com/ron-png/oxi-dns/main/scripts/install.sh" | sh
 ```
 
 Installs the binary to `/opt/oxi-dns/`, config to `/etc/oxi-dns/config.toml`, and creates a systemd service.
@@ -119,7 +119,7 @@ During a fresh install, the script interactively prompts for:
 
 Example — install from the development channel:
 ```bash
-curl -sSL "https://raw.githubusercontent.com/ron-png/oxi-dns/master/scripts/install.sh" | sh -s -- -c development
+curl -sSL "https://raw.githubusercontent.com/ron-png/oxi-dns/main/scripts/install.sh" | sh -s -- -c development
 ```
 
 ### Docker / Podman
@@ -211,7 +211,7 @@ sudo /opt/oxi-dns/uninstall.sh
 Alternatively, via the install script:
 
 ```bash
-curl -sSL "https://raw.githubusercontent.com/ron-png/oxi-dns/master/scripts/install.sh" | sh -s -- -u
+curl -sSL "https://raw.githubusercontent.com/ron-png/oxi-dns/main/scripts/install.sh" | sh -s -- -u
 ```
 
 ## Contributing
