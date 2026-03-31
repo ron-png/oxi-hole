@@ -454,9 +454,16 @@ async fn fetch_latest_release(channel: &str) -> anyhow::Result<GitHubRelease> {
             .error_for_status()?
             .json()
             .await?;
+        // Pick the release with the highest version (GitHub order is by creation date, not version)
         releases
             .into_iter()
-            .next()
+            .max_by(|a, b| {
+                let va = clean_version(&a.tag_name);
+                let vb = clean_version(&b.tag_name);
+                let (a_nums, a_suf) = parse_version(&va);
+                let (b_nums, b_suf) = parse_version(&vb);
+                a_nums.cmp(&b_nums).then(a_suf.cmp(&b_suf))
+            })
             .ok_or_else(|| anyhow::anyhow!("No releases found"))
     } else {
         let url = format!(
