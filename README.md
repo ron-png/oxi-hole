@@ -227,6 +227,29 @@ curl -sSL "https://raw.githubusercontent.com/ron-png/oxi-dns/main/scripts/instal
 
 Bug reports, feature requests, and pull requests are welcome. Open an issue on GitHub.
 
-## License
+## TODO
 
-MIT
+### Goals for Version 1:
+- verify that every feature on the WebUI works as expected
+  - upstream servers do not grey out immediately after enabling root servers. (Visual Bug)
+  - remove the query log from the advanced tab. Keep it only in the logs tab. (redundancy)
+  - Verify that the logs are deleted properly (feature)
+  - Verify client IP anonymization (feature)
+  - delete unnecessary files (chores)
+
+### Goals for Version 2:
+- Security enhancements
+  - DNSsec
+  - DNScrypt
+  - logging system errors
+
+### Goals for Version 3:
+- Complete DNS Server that can run as a recursive DNS as well
+- dns rewrites
+
+### Stuff that might be done at last
+- Look into RFC Compliance
+- Besides User Login and password, LDAP as well
+- Not only single entries, but complete Allowlist section
+- explore whether persistent cache is feaseble or not
+- If my finances allow, a security audit of the code (option for Donations, maybe a donation button?)
