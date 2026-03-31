@@ -2473,10 +2473,12 @@
         }
 
         async function toggleFeature(id, enabled) {
-            const toggle = document.getElementById(`toggle-${id}`);
-            toggle.classList.add('loading');
+            const card = document.getElementById(`toggle-${id}`)?.closest('.feature-card');
             const status = document.getElementById(`status-${id}`);
-            if (status) status.textContent = enabled ? 'Loading blocklist...' : 'Removing...';
+
+            // Optimistic UI: update immediately
+            if (card) card.classList.toggle('active', enabled);
+            if (status) status.textContent = enabled ? 'Enabled' : 'Disabled';
 
             try {
                 await fetch(`/api/features/${id}`, {
@@ -2484,13 +2486,15 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ enabled })
                 });
-                await refreshFeatures();
-                await refreshStats();
+                refreshStats();
             } catch (e) {
                 console.error(e);
+                // Revert on failure
+                if (card) card.classList.toggle('active', !enabled);
                 if (status) status.textContent = 'Error!';
+                const checkbox = document.querySelector(`#toggle-${id} input[type="checkbox"]`);
+                if (checkbox) checkbox.checked = !enabled;
             }
-            toggle.classList.remove('loading');
         }
 
         // ---- Stats ----
