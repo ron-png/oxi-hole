@@ -235,7 +235,10 @@ Bug reports, feature requests, and pull requests are welcome. Open an issue on G
   - remove the query log from the advanced tab. Keep it only in the logs tab. (redundancy)
   - Verify that the logs are deleted properly (feature)
   - Verify client IP anonymization (feature)
-  - delete unnecessary files (chores)
+  - delete unnecessary files/lines of code (chores)
+  - Make the UI more user friendly (feature)
+  - Verify DNS over TLS, HTTPS and QUIC work (feature)
+  - Verify that changing Settings in the UI (Like Port or listen address) works with the generated terminal commands.
 
 ### Goals for Version 2:
 - Security enhancements
