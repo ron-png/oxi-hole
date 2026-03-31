@@ -253,7 +253,7 @@ Please note that this list is not a promise, rather thoughts I might change my m
   - Do not forget the roots. Setup wizard should be beginner friendly and not overwhelm with too much choice.
 - dns rewrites
 
-### Stuff that might be done at last
+### Stuff that might be done
 - Look into RFC Compliance
 - Besides User Login and password, LDAP as well
 - Not only single entries, but complete Allowlist section
