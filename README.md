@@ -227,7 +227,9 @@ curl -sSL "https://raw.githubusercontent.com/ron-png/oxi-dns/main/scripts/instal
 
 Bug reports, feature requests, and pull requests are welcome. Open an issue on GitHub.
 
-## TODO
+## TODO/PLANS
+
+Please note that this list is not a promise.
 
 ### Goals for Version 1:
 - verify that every feature on the WebUI works as expected
