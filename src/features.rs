@@ -154,66 +154,67 @@ impl FeatureManager {
         };
         // Write lock on features is dropped here
 
-        // Handle safe search separately
-        if feature_id == "safe_search" {
-            if enabled {
-                info!("Enabling safe search, loading rules...");
+        // Handle safe search and YouTube safe search
+        if feature_id == "safe_search" || feature_id == "youtube_safe_search" {
+            // Rebuild the entire rules set from scratch based on what's enabled
+            let mut all_rules = self.safe_search_rules.write().await;
+            all_rules.clear();
+
+            // Determine which features should be active after this toggle
+            let safe_search_active = if feature_id == "safe_search" {
+                enabled
+            } else {
+                other_safe_search_enabled
+            };
+            let youtube_active = if feature_id == "youtube_safe_search" {
+                enabled
+            } else {
+                other_safe_search_enabled
+            };
+
+            if safe_search_active {
                 match Self::fetch_rules(SAFE_SEARCH_LIST_URL, "safe_search").await {
                     Ok(rules) => {
                         info!("Loaded {} safe search rewrite rules", rules.len());
-                        let mut all_rules = self.safe_search_rules.write().await;
                         all_rules.extend(rules);
-                        *self.safe_search_enabled.write().await = true;
                     }
                     Err(e) => {
                         warn!("Failed to load safe search rules: {}", e);
+                        // Mark the feature as failed so it doesn't appear enabled with empty rules
+                        if feature_id == "safe_search" {
+                            let mut features = self.features.write().await;
+                            if let Some(f) = features.iter_mut().find(|f| f.id == "safe_search") {
+                                f.enabled = false;
+                            }
+                        }
                     }
                 }
-            } else {
-                let mut all_rules = self.safe_search_rules.write().await;
-                all_rules.clear();
-                if other_safe_search_enabled {
-                    if let Ok(rules) =
-                        Self::fetch_rules(YOUTUBE_SAFE_SEARCH_LIST_URL, "youtube_safe_search").await
-                    {
-                        all_rules.extend(rules);
-                    }
-                } else {
-                    *self.safe_search_enabled.write().await = false;
-                }
-                info!("Safe search disabled");
             }
-            return;
-        }
 
-        // Handle YouTube safe search separately
-        if feature_id == "youtube_safe_search" {
-            if enabled {
-                info!("Enabling YouTube safe search, loading rules...");
+            if youtube_active {
                 match Self::fetch_rules(YOUTUBE_SAFE_SEARCH_LIST_URL, "youtube_safe_search").await {
                     Ok(rules) => {
                         info!("Loaded {} YouTube safe search rewrite rules", rules.len());
-                        let mut all_rules = self.safe_search_rules.write().await;
                         all_rules.extend(rules);
-                        *self.safe_search_enabled.write().await = true;
                     }
                     Err(e) => {
                         warn!("Failed to load YouTube safe search rules: {}", e);
+                        if feature_id == "youtube_safe_search" {
+                            let mut features = self.features.write().await;
+                            if let Some(f) = features.iter_mut().find(|f| f.id == "youtube_safe_search") {
+                                f.enabled = false;
+                            }
+                        }
                     }
                 }
-            } else {
-                let mut all_rules = self.safe_search_rules.write().await;
-                all_rules.clear();
-                if other_safe_search_enabled {
-                    if let Ok(rules) = Self::fetch_rules(SAFE_SEARCH_LIST_URL, "safe_search").await
-                    {
-                        all_rules.extend(rules);
-                    }
-                } else {
-                    *self.safe_search_enabled.write().await = false;
-                }
-                info!("YouTube safe search disabled");
             }
+
+            *self.safe_search_enabled.write().await = !all_rules.is_empty();
+            info!(
+                "{} {}",
+                feature_id,
+                if enabled { "enabled" } else { "disabled" }
+            );
             return;
         }
 
