@@ -96,24 +96,14 @@ impl AppState {
 }
 
 #[derive(Clone)]
-struct CspNonce(String);
-
-#[derive(Clone)]
 struct IsHttps;
 
 // ==================== Security Headers Middleware ====================
 
 async fn security_headers_middleware(
-    mut request: axum::extract::Request,
+    request: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> Response {
-    // Generate per-request nonce for CSP
-    let nonce_bytes: [u8; 16] = rand::random();
-    let nonce = hex::encode(nonce_bytes);
-
-    // Store nonce in request extensions for HTML handlers
-    request.extensions_mut().insert(CspNonce(nonce.clone()));
-
     // Check if this is an HTTPS request (set by HTTPS middleware layer)
     let is_https = request.extensions().get::<IsHttps>().is_some();
 
@@ -126,10 +116,9 @@ async fn security_headers_middleware(
     );
     headers.insert(
         axum::http::header::CONTENT_SECURITY_POLICY,
-        format!(
-            "default-src 'self'; script-src 'self' 'unsafe-inline' 'nonce-{}'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
-            nonce
-        ).parse().unwrap(),
+        "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+            .parse()
+            .unwrap(),
     );
     headers.insert(
         axum::http::header::REFERRER_POLICY,
@@ -597,16 +586,12 @@ fn require_permission(user: &AuthenticatedUser, perm: Permission) -> Result<(), 
 
 // ==================== Auth Pages ====================
 
-async fn login_page(nonce: Option<axum::Extension<CspNonce>>) -> Html<String> {
-    let html = include_str!("login.html");
-    let nonce_val = nonce.map(|n| n.0 .0.clone()).unwrap_or_default();
-    Html(html.replace("<script>", &format!("<script nonce=\"{}\">", nonce_val)))
+async fn login_page() -> Html<&'static str> {
+    Html(include_str!("login.html"))
 }
 
-async fn setup_page(nonce: Option<axum::Extension<CspNonce>>) -> Html<String> {
-    let html = include_str!("setup.html");
-    let nonce_val = nonce.map(|n| n.0 .0.clone()).unwrap_or_default();
-    Html(html.replace("<script>", &format!("<script nonce=\"{}\">", nonce_val)))
+async fn setup_page() -> Html<&'static str> {
+    Html(include_str!("setup.html"))
 }
 
 async fn api_setup_info(State(state): State<AppState>) -> Json<serde_json::Value> {
@@ -769,7 +754,7 @@ async fn api_auth_login(
     {
         Ok(session_token) => {
             let cookie = format!(
-                "oxi_session={}; HttpOnly; SameSite=Strict; Path=/; Max-Age=604800; Secure",
+                "oxi_session={}; HttpOnly; SameSite=Strict; Path=/; Max-Age=604800",
                 session_token
             );
             (
@@ -819,7 +804,7 @@ async fn api_auth_setup(
             {
                 Ok(session_token) => {
                     let cookie = format!(
-                        "oxi_session={}; HttpOnly; SameSite=Strict; Path=/; Max-Age=604800; Secure",
+                        "oxi_session={}; HttpOnly; SameSite=Strict; Path=/; Max-Age=604800",
                         session_token
                     );
                     (
@@ -864,7 +849,7 @@ async fn api_auth_logout(
         }
     }
 
-    let cookie = "oxi_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0; Secure";
+    let cookie = "oxi_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0";
     (
         StatusCode::OK,
         [(SET_COOKIE, cookie)],
@@ -1239,10 +1224,8 @@ async fn api_revoke_token(
 
 // ==================== Dashboard ====================
 
-async fn dashboard(nonce: Option<axum::Extension<CspNonce>>) -> Html<String> {
-    let html = include_str!("dashboard.html");
-    let nonce_val = nonce.map(|n| n.0 .0.clone()).unwrap_or_default();
-    Html(html.replace("<script>", &format!("<script nonce=\"{}\">", nonce_val)))
+async fn dashboard() -> Html<&'static str> {
+    Html(include_str!("dashboard.html"))
 }
 
 // ==================== Stats ====================
