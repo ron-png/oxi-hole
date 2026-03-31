@@ -135,8 +135,11 @@ impl UpdateChecker {
 
     /// Download the new binary to a temp path without replacing the current binary.
     /// Returns (temp_path, version_string) on success.
-    pub async fn download_update(&self) -> Result<(std::path::PathBuf, String), String> {
-        let info = self.check(true, "stable").await;
+    pub async fn download_update(
+        &self,
+        channel: &str,
+    ) -> Result<(std::path::PathBuf, String), String> {
+        let info = self.check(true, channel).await;
         let download_url = info
             .download_url
             .ok_or("No download URL available for this platform")?;
@@ -215,7 +218,7 @@ pub async fn perform_robust_update(
         s.state = UpdateState::Downloading;
     }
 
-    let (tmp_path, version) = match update_checker.download_update().await {
+    let (tmp_path, version) = match update_checker.download_update(channel).await {
         Ok(r) => r,
         Err(e) => {
             warn!("Update: download failed: {}", e);

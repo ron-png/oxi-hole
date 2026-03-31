@@ -27,6 +27,7 @@ SERVICE_NAME="oxi-dns"
 LOG_DIR="/var/log/oxi-dns"
 
 CHANNEL="stable"
+PINNED_VERSION=""
 REINSTALL=0
 UNINSTALL=0
 UPDATE=0
@@ -88,7 +89,8 @@ Oxi-DNS Installer
 Usage: $0 [options]
 
 Options:
-  -c <channel>  Release channel: stable (default), beta, edge
+  -c <channel>  Release channel: stable (default), development
+  -V <version>  Install a specific version (e.g. v0.4.0.9-dev)
   -r            Reinstall (purge all files and install fresh)
   -u            Uninstall Oxi-DNS
   -U            Update (download latest binary and restart service)
@@ -105,9 +107,10 @@ Examples:
 EOF
 }
 
-while getopts "c:ruUvh" opt; do
+while getopts "c:V:ruUvh" opt; do
     case "$opt" in
         c) CHANNEL="$OPTARG" ;;
+        V) PINNED_VERSION="$OPTARG" ;;
         r) REINSTALL=1 ;;
         u) UNINSTALL=1 ;;
         U) UPDATE=1 ;;
@@ -274,6 +277,13 @@ download_to_stdout() {
 # ============================================================================
 
 get_latest_version() {
+    # If a specific version is pinned, use it directly
+    if [ -n "$PINNED_VERSION" ]; then
+        VERSION="$PINNED_VERSION"
+        log_verbose "Using pinned version: $VERSION"
+        return
+    fi
+
     log_verbose "Fetching latest release version (channel: ${CHANNEL})..."
 
     if [ "$CHANNEL" = "development" ]; then
