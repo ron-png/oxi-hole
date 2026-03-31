@@ -656,9 +656,8 @@
             color: var(--accent);
         }
 
-        #query-log {
-            max-height: 450px;
-            overflow-y: auto;
+        #logs-table-wrap {
+            overflow-x: auto;
         }
 
         .panel {
@@ -3606,13 +3605,34 @@
             if (enabled) {
                 document.getElementById('logsRefreshBtn').style.display = 'none';
                 logsAutoRefreshInterval = setInterval(() => {
-                    if (currentMode === 'logs') resetAndLoadLogs();
+                    if (currentMode === 'logs') softRefreshLogs();
                 }, 2000);
             } else {
                 document.getElementById('logsRefreshBtn').style.display = '';
                 clearInterval(logsAutoRefreshInterval);
                 logsAutoRefreshInterval = null;
             }
+        }
+
+        async function softRefreshLogs() {
+            // Refresh logs without resetting scroll position or cursor
+            try {
+                const search = document.getElementById('logSearchInput').value.trim();
+                const status = document.getElementById('logStatusFilter').value;
+                const params = new URLSearchParams({ limit: '100' });
+                if (search) params.set('search', search);
+                if (status) params.set('status', status);
+                const res = await fetch('/api/logs?' + params.toString());
+                if (!res.ok) return;
+                const page = await res.json();
+                const tbody = document.getElementById('logsBody');
+                // Replace content without clearing scroll
+                const fragment = document.createDocumentFragment();
+                for (const e of page.entries) {
+                    fragment.appendChild(createLogRow(e));
+                }
+                tbody.replaceChildren(fragment);
+            } catch (_) {}
         }
 
         async function refreshLogSettings() {
