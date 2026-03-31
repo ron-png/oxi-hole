@@ -277,8 +277,9 @@ get_latest_version() {
     log_verbose "Fetching latest release version (channel: ${CHANNEL})..."
 
     if [ "$CHANNEL" = "development" ]; then
+        # Fetch all releases and pick the highest version (GitHub orders by creation date, not version)
         RELEASE_URL="https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/releases"
-        VERSION=$(download_to_stdout "$RELEASE_URL" | grep '"tag_name"' | head -n 1 | sed -E 's/.*"tag_name":\s*"([^"]+)".*/\1/')
+        VERSION=$(download_to_stdout "$RELEASE_URL" | grep '"tag_name"' | sed -E 's/.*"tag_name":\s*"([^"]+)".*/\1/' | sort -V | tail -n 1)
     else
         RELEASE_URL="https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/releases/latest"
         VERSION=$(download_to_stdout "$RELEASE_URL" | grep '"tag_name"' | sed -E 's/.*"tag_name":\s*"([^"]+)".*/\1/')
@@ -288,7 +289,7 @@ get_latest_version() {
     if [ -z "$VERSION" ]; then
         log_warn "No release found for channel '${CHANNEL}'. Falling back to newest available..."
         RELEASE_URL="https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/releases"
-        VERSION=$(download_to_stdout "$RELEASE_URL" | grep '"tag_name"' | head -n 1 | sed -E 's/.*"tag_name":\s*"([^"]+)".*/\1/')
+        VERSION=$(download_to_stdout "$RELEASE_URL" | grep '"tag_name"' | sed -E 's/.*"tag_name":\s*"([^"]+)".*/\1/' | sort -V | tail -n 1)
     fi
 
     if [ -z "$VERSION" ]; then
@@ -1832,16 +1833,16 @@ verify_running() {
 print_banner() {
     printf "${CYAN}"
     cat <<'BANNER'
-   ____       _        _   _       _
-  / __ \     (_)      | | | |     | |
- | |  | |_  ___       | |_| | ___ | | ___
- | |  | \ \/ / |______|  _  |/ _ \| |/ _ \
- | |__| |>  <| |______| | | | (_) | |  __/
-  \____//_/\_\_|      |_| |_|\___/|_|\___|
+   ____       _        ____  _   _ ____
+  / __ \     (_)      |  _ \| \ | / ___|
+ | |  | |_  ___       | | | |  \| \___ \
+ | |  | \ \/ / |_____ | |_| | |\  |___) |
+ | |__| |>  <| |      |____/|_| \_|____/
+  \____//_/\_\_|
 
 BANNER
     printf "${NC}"
-    printf "  ${BOLD}AdGuardHome-style DNS sinkhole, written in Rust${NC}\n"
+    printf "  ${BOLD}DNS ad blocker & sinkhole, written in Rust${NC}\n"
     printf "  ${CYAN}https://github.com/${REPO_OWNER}/${REPO_NAME}${NC}\n\n"
 }
 
