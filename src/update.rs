@@ -559,6 +559,11 @@ mod tests {
         assert!(!version_newer("0.0.5a", "0.0.5a"));
         assert!(!version_newer("0.0.5", "0.0.5a"));
         assert!(version_newer("0.0.6", "0.0.5b"));
+        // 4-part versions
+        assert!(version_newer("0.4.0.4", "0.4.0"));
+        assert!(version_newer("0.4.0.6", "0.4.0.4"));
+        assert!(!version_newer("0.4.0.4", "0.4.0.4"));
+        assert!(!version_newer("0.4.0.3", "0.4.0.4"));
     }
 
     #[test]
@@ -567,5 +572,8 @@ mod tests {
         assert_eq!(clean_version("v0.0.4a"), "0.0.4a");
         assert_eq!(clean_version("v1.2.3"), "1.2.3");
         assert_eq!(clean_version("0.0.5"), "0.0.5");
+        // Dev suffix stripped
+        assert_eq!(clean_version("v0.4.0.6-dev"), "0.4.0.6");
+        assert_eq!(clean_version("v0.4.0.4-dev"), "0.4.0.4");
     }
 }
