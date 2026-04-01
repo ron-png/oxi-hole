@@ -252,6 +252,7 @@ Please note that this list is not a promise, rather thoughts I might change my m
 
 ### Goals for Version 3:
 - More statistics, fancy graphs and more
+- make the log entries clickable and show more information about the query
 - dns rewrites
 
 ### Stuff that might be done
