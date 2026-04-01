@@ -249,8 +249,7 @@ Please note that this list is not a promise, rather thoughts I might change my m
 - logging system errors
 
 ### Goals for Version 3:
-- Complete DNS Server that can run as a recursive DNS as well (shift from being a main focus to being a feature of the server)
-  - Do not forget the roots. Setup wizard should be beginner friendly and not overwhelm with too much choice.
+- More statistics, fancy graphs and more
 - dns rewrites
 
 ### Stuff that might be done
