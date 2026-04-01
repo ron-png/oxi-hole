@@ -1857,26 +1857,6 @@
                 </div>
             </div>
 
-            <div class="section">
-                <h2>Query Log</h2>
-                <div id="query-log">
-                    <table>
-                        <thead>
-                            <tr>
-                                <th>Time</th>
-                                <th>Domain</th>
-                                <th>Type</th>
-                                <th>Client</th>
-                                <th>Status</th>
-                                <th>Upstream</th>
-                                <th>Time (ms)</th>
-                            </tr>
-                        </thead>
-                        <tbody id="queryBody"></tbody>
-                    </table>
-                </div>
-            </div>
-
             <!-- User Management (manage_users only) -->
             <div class="section manage-users-only" id="usersSection">
                 <h2>User Management</h2>
@@ -2479,6 +2459,15 @@
             if (card) card.classList.toggle('active', enabled);
             if (status) status.textContent = enabled ? 'Enabled' : 'Disabled';
 
+            // Grey out upstream controls immediately when toggling root servers
+            if (id === 'root_servers') {
+                const controls = document.getElementById('upstreamControls');
+                if (controls) {
+                    controls.style.opacity = enabled ? '0.3' : '1';
+                    controls.style.pointerEvents = enabled ? 'none' : 'auto';
+                }
+            }
+
             try {
                 await fetch(`/api/features/${id}`, {
                     method: 'POST',
@@ -2493,6 +2482,13 @@
                 if (status) status.textContent = 'Error!';
                 const checkbox = document.querySelector(`#toggle-${id} input[type="checkbox"]`);
                 if (checkbox) checkbox.checked = !enabled;
+                if (id === 'root_servers') {
+                    const controls = document.getElementById('upstreamControls');
+                    if (controls) {
+                        controls.style.opacity = !enabled ? '0.3' : '1';
+                        controls.style.pointerEvents = !enabled ? 'none' : 'auto';
+                    }
+                }
             }
         }
 
@@ -2536,23 +2532,6 @@
                     </tr>
                 `).join('');
 
-                // Advanced view
-                if (currentMode === 'advanced') {
-                    const body = document.getElementById('queryBody');
-                    body.innerHTML = queries.map(q => `
-                        <tr>
-                            <td>${new Date(q.timestamp).toLocaleTimeString()}</td>
-                            <td>${escapeHtml(q.domain)}</td>
-                            <td>${escapeHtml(q.query_type)}</td>
-                            <td>${escapeHtml(q.client_ip)}</td>
-                            <td><span class="badge ${q.blocked ? 'blocked' : (q.upstream === 'safe-search' ? 'rewrite' : 'allowed')}">
-                                ${q.blocked ? 'BLOCKED' : (q.upstream === 'safe-search' ? 'SAFE' : 'OK')}
-                            </span></td>
-                            <td>${escapeHtml(q.upstream) || '-'}</td>
-                            <td>${q.response_time_ms}</td>
-                        </tr>
-                    `).join('');
-                }
             } catch (e) { console.error(e); }
         }
 
