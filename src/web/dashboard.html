@@ -1040,7 +1040,7 @@
 
         .network-field {
             display: flex;
-            align-items: center;
+            align-items: flex-start;
             gap: 12px;
             margin-bottom: 8px;
         }
@@ -1080,6 +1080,28 @@
             min-width: 0;
         }
 
+        .network-port-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 12px;
+        }
+
+        .network-port-card {
+            min-width: 0;
+        }
+
+        .network-port-label {
+            font-size: 11px;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+            color: var(--text-muted);
+            margin-bottom: 4px;
+        }
+
+        .network-port-card input {
+            width: 100%;
+        }
+
         .listen-target {
             margin-top: 6px;
             font-size: 12px;
@@ -1100,14 +1122,16 @@
 
         .network-field .proto-toggle {
             display: flex;
-            align-items: center;
+            align-items: flex-start;
             gap: 8px;
+            flex: 1;
         }
 
         .network-field .proto-toggle label.toggle-switch {
             flex-shrink: 0;
             width: 34px;
             height: 18px;
+            margin-top: 25px;
         }
 
         .network-field .proto-toggle .toggle-slider {
@@ -1126,13 +1150,20 @@
             transform: translateX(16px);
         }
 
-        .network-field .proto-toggle input[type="text"] {
-            flex: 1;
-        }
-
-        .network-field .proto-toggle input[type="text"]:disabled {
+        .network-field .proto-toggle input:disabled,
+        .network-port-card input:disabled {
             opacity: 0.4;
             cursor: not-allowed;
+        }
+
+        @media (max-width: 900px) {
+            .network-port-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .network-field .proto-toggle label.toggle-switch {
+                margin-top: 0;
+            }
         }
 
         .reconfig-banner {
@@ -2033,15 +2064,35 @@
                     <div class="network-field">
                         <label>DNS Server</label>
                         <div class="network-input-stack">
-                            <input type="text" id="net-dns" placeholder="0.0.0.0:53" oninput="checkNetworkChanges()">
-                            <div class="listen-target" id="net-dns-target"></div>
+                            <div class="network-port-grid">
+                                <div class="network-port-card">
+                                    <div class="network-port-label">IPv4 Port</div>
+                                    <input type="number" id="net-dns-ipv4-port" placeholder="53" min="1" max="65535" inputmode="numeric" oninput="checkNetworkChanges()">
+                                    <div class="listen-target" id="net-dns-ipv4-target"></div>
+                                </div>
+                                <div class="network-port-card">
+                                    <div class="network-port-label">IPv6 Port</div>
+                                    <input type="number" id="net-dns-ipv6-port" placeholder="53" min="1" max="65535" inputmode="numeric" oninput="checkNetworkChanges()">
+                                    <div class="listen-target" id="net-dns-ipv6-target"></div>
+                                </div>
+                            </div>
                         </div>
                     </div>
                     <div class="network-field">
                         <label>Web Dashboard</label>
                         <div class="network-input-stack">
-                            <input type="text" id="net-web" placeholder="0.0.0.0:9853" oninput="checkNetworkChanges()">
-                            <div class="listen-target" id="net-web-target"></div>
+                            <div class="network-port-grid">
+                                <div class="network-port-card">
+                                    <div class="network-port-label">IPv4 Port</div>
+                                    <input type="number" id="net-web-ipv4-port" placeholder="9853" min="1" max="65535" inputmode="numeric" oninput="checkNetworkChanges()">
+                                    <div class="listen-target" id="net-web-ipv4-target"></div>
+                                </div>
+                                <div class="network-port-card">
+                                    <div class="network-port-label">IPv6 Port</div>
+                                    <input type="number" id="net-web-ipv6-port" placeholder="9853" min="1" max="65535" inputmode="numeric" oninput="checkNetworkChanges()">
+                                    <div class="listen-target" id="net-web-ipv6-target"></div>
+                                </div>
+                            </div>
                         </div>
                     </div>
                     <div class="network-field">
@@ -2051,8 +2102,18 @@
                                     onchange="toggleProtocol('dot', this.checked)"><span
                                     class="toggle-slider"></span></label>
                             <div class="network-input-stack">
-                                <input type="text" id="net-dot" placeholder="0.0.0.0:853" oninput="checkNetworkChanges()" disabled>
-                                <div class="listen-target" id="net-dot-target"></div>
+                                <div class="network-port-grid">
+                                    <div class="network-port-card">
+                                        <div class="network-port-label">IPv4 Port</div>
+                                        <input type="number" id="net-dot-ipv4-port" placeholder="853" min="1" max="65535" inputmode="numeric" oninput="checkNetworkChanges()" disabled>
+                                        <div class="listen-target" id="net-dot-ipv4-target"></div>
+                                    </div>
+                                    <div class="network-port-card">
+                                        <div class="network-port-label">IPv6 Port</div>
+                                        <input type="number" id="net-dot-ipv6-port" placeholder="853" min="1" max="65535" inputmode="numeric" oninput="checkNetworkChanges()" disabled>
+                                        <div class="listen-target" id="net-dot-ipv6-target"></div>
+                                    </div>
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -2063,8 +2124,18 @@
                                     onchange="toggleProtocol('doh', this.checked)"><span
                                     class="toggle-slider"></span></label>
                             <div class="network-input-stack">
-                                <input type="text" id="net-doh" placeholder="0.0.0.0:443" oninput="checkNetworkChanges()" disabled>
-                                <div class="listen-target" id="net-doh-target"></div>
+                                <div class="network-port-grid">
+                                    <div class="network-port-card">
+                                        <div class="network-port-label">IPv4 Port</div>
+                                        <input type="number" id="net-doh-ipv4-port" placeholder="443" min="1" max="65535" inputmode="numeric" oninput="checkNetworkChanges()" disabled>
+                                        <div class="listen-target" id="net-doh-ipv4-target"></div>
+                                    </div>
+                                    <div class="network-port-card">
+                                        <div class="network-port-label">IPv6 Port</div>
+                                        <input type="number" id="net-doh-ipv6-port" placeholder="443" min="1" max="65535" inputmode="numeric" oninput="checkNetworkChanges()" disabled>
+                                        <div class="listen-target" id="net-doh-ipv6-target"></div>
+                                    </div>
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -2075,8 +2146,18 @@
                                     onchange="toggleProtocol('doq', this.checked)"><span
                                     class="toggle-slider"></span></label>
                             <div class="network-input-stack">
-                                <input type="text" id="net-doq" placeholder="0.0.0.0:853" oninput="checkNetworkChanges()" disabled>
-                                <div class="listen-target" id="net-doq-target"></div>
+                                <div class="network-port-grid">
+                                    <div class="network-port-card">
+                                        <div class="network-port-label">IPv4 Port</div>
+                                        <input type="number" id="net-doq-ipv4-port" placeholder="853" min="1" max="65535" inputmode="numeric" oninput="checkNetworkChanges()" disabled>
+                                        <div class="listen-target" id="net-doq-ipv4-target"></div>
+                                    </div>
+                                    <div class="network-port-card">
+                                        <div class="network-port-label">IPv6 Port</div>
+                                        <input type="number" id="net-doq-ipv6-port" placeholder="853" min="1" max="65535" inputmode="numeric" oninput="checkNetworkChanges()" disabled>
+                                        <div class="listen-target" id="net-doq-ipv6-target"></div>
+                                    </div>
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -3278,22 +3359,88 @@
         let networkPollTimer = null;
         let networkInputsInitialized = false;
         let bannerDismissed = false;
-        const PROTO_DEFAULTS = { dot: '0.0.0.0:853', doh: '0.0.0.0:443', doq: '0.0.0.0:853' };
+        let dismissedNetworkSignature = '';
+        const NETWORK_LISTENERS = [
+            { prefix: 'net-dns', key: 'dns.listen', serverKey: 'dns_listen', label: 'DNS Server', required: true, defaultPort: '53' },
+            { prefix: 'net-web', key: 'web.listen', serverKey: 'web_listen', label: 'Web Dashboard', required: true, defaultPort: '9853' },
+            { prefix: 'net-dot', key: 'dns.dot_listen', serverKey: 'dot_listen', label: 'DNS-over-TLS', required: false, toggleId: 'toggle-dot', proto: 'dot', defaultPort: '853' },
+            { prefix: 'net-doh', key: 'dns.doh_listen', serverKey: 'doh_listen', label: 'DNS-over-HTTPS', required: false, toggleId: 'toggle-doh', proto: 'doh', defaultPort: '443' },
+            { prefix: 'net-doq', key: 'dns.doq_listen', serverKey: 'doq_listen', label: 'DNS-over-QUIC', required: false, toggleId: 'toggle-doq', proto: 'doq', defaultPort: '853' },
+        ];
+
+        function getPortInputId(prefix, family) {
+            return `${prefix}-${family}-port`;
+        }
+
+        function getPortInput(prefix, family) {
+            return document.getElementById(getPortInputId(prefix, family));
+        }
+
+        function getFamilyWildcardHost(family) {
+            return family === 'ipv4' ? '0.0.0.0' : '::';
+        }
+
+        function getServerListenValues(listener) {
+            return serverNetworkState[listener.serverKey] || [];
+        }
+
+        function getFamilyBindings(values) {
+            const grouped = { ipv4: [], ipv6: [] };
+            for (const raw of values) {
+                const binding = parseListenBinding(raw);
+                if (!binding.host) continue;
+                const family = isIpv6Host(binding.host) ? 'ipv6' : 'ipv4';
+                grouped[family].push({ raw, host: binding.host, port: binding.port });
+            }
+            return grouped;
+        }
+
+        function setPortInputValue(prefix, family, bindings) {
+            const input = getPortInput(prefix, family);
+            if (!input) return;
+
+            input.dataset.defaultPlaceholder ||= input.getAttribute('placeholder') || '';
+            input.dataset.ambiguous = 'false';
+            if (bindings.length === 0) {
+                input.value = '';
+                input.dataset.mixed = 'false';
+                input.setAttribute('placeholder', input.dataset.defaultPlaceholder);
+                return;
+            }
+
+            if (bindings.some(binding => binding.ambiguousIpv6)) {
+                input.value = '';
+                input.dataset.mixed = 'true';
+                input.dataset.ambiguous = 'true';
+                input.setAttribute('placeholder', 'Bracket IPv6 first');
+                return;
+            }
+
+            const ports = [...new Set(bindings.map(binding => binding.port).filter(Boolean))];
+            if (ports.length === 1) {
+                input.value = ports[0];
+                input.dataset.mixed = 'false';
+                input.setAttribute('placeholder', input.dataset.defaultPlaceholder);
+                return;
+            }
+
+            input.value = '';
+            input.dataset.mixed = 'true';
+            input.setAttribute('placeholder', 'Mixed ports');
+        }
 
         function syncNetworkInputsFromServer() {
-            document.getElementById('net-dns').value = (serverNetworkState.dns_listen || [])[0] || '';
-            document.getElementById('net-web').value = (serverNetworkState.web_listen || [])[0] || '';
+            for (const listener of NETWORK_LISTENERS) {
+                const bindings = getFamilyBindings(getServerListenValues(listener));
+                setPortInputValue(listener.prefix, 'ipv4', bindings.ipv4);
+                setPortInputValue(listener.prefix, 'ipv6', bindings.ipv6);
 
-            for (const proto of ['dot', 'doh', 'doq']) {
-                const key = proto + '_listen';
-                const val = (serverNetworkState[key] || [])[0] || '';
-                const toggle = document.getElementById('toggle-' + proto);
-                const input = document.getElementById('net-' + proto);
-                const enabled = Boolean(val);
-
-                toggle.checked = enabled;
-                input.disabled = !enabled;
-                input.value = val;
+                if (listener.toggleId) {
+                    const enabled = bindings.ipv4.length > 0 || bindings.ipv6.length > 0;
+                    document.getElementById(listener.toggleId).checked = enabled;
+                    getPortInput(listener.prefix, 'ipv4').disabled = !enabled;
+                    getPortInput(listener.prefix, 'ipv6').disabled = !enabled;
+                }
             }
 
             networkInputsInitialized = true;
@@ -3308,28 +3455,29 @@
 
         function parseListenBinding(value) {
             const trimmed = (value || '').trim();
-            if (!trimmed) return { host: '', port: '' };
+            if (!trimmed) return { host: '', port: '', ambiguousIpv6: false };
 
             if (trimmed.startsWith('[')) {
                 const match = trimmed.match(/^\[([^\]]+)\](?::(\d+))?$/);
                 if (match) {
-                    return { host: match[1], port: match[2] || '' };
+                    return { host: match[1], port: match[2] || '', ambiguousIpv6: false };
                 }
             }
 
             const colonCount = (trimmed.match(/:/g) || []).length;
             if (colonCount > 1) {
-                return { host: trimmed, port: '' };
+                return { host: trimmed, port: '', ambiguousIpv6: true };
             }
 
             const lastColon = trimmed.lastIndexOf(':');
             if (lastColon === -1) {
-                return { host: trimmed, port: '' };
+                return { host: trimmed, port: '', ambiguousIpv6: false };
             }
 
             return {
                 host: trimmed.slice(0, lastColon),
                 port: trimmed.slice(lastColon + 1),
+                ambiguousIpv6: false,
             };
         }
 
@@ -3340,6 +3488,10 @@
         function formatListenAddress(host, port) {
             if (!port) return host;
             return isIpv6Host(host) ? `[${host}]:${port}` : `${host}:${port}`;
+        }
+
+        function isValidPort(port) {
+            return /^\d+$/.test(port) && Number(port) >= 1 && Number(port) <= 65535;
         }
 
         function shellQuote(value) {
@@ -3362,40 +3514,27 @@
             banner.classList.toggle('is-error', isError);
         }
 
-        function getNetworkValidationError() {
-            const requiredFields = [
-                { id: 'net-dns', label: 'DNS Server' },
-                { id: 'net-web', label: 'Web Dashboard' },
-            ];
-
-            for (const field of requiredFields) {
-                if (!document.getElementById(field.id).value.trim()) {
-                    return `${field.label} listen address is required.`;
-                }
-            }
-
-            for (const proto of ['dot', 'doh', 'doq']) {
-                const toggle = document.getElementById('toggle-' + proto);
-                const input = document.getElementById('net-' + proto);
-                if (toggle.checked && !input.value.trim()) {
-                    const label = proto === 'dot'
-                        ? 'DNS-over-TLS'
-                        : proto === 'doh'
-                            ? 'DNS-over-HTTPS'
-                            : 'DNS-over-QUIC';
-                    return `${label} listen address is required when enabled.`;
-                }
-            }
-
-            return null;
-        }
-
         function buildReconfigureCommand(changes) {
             return `sudo oxi-dns --reconfigure ${changes.map(shellQuote).join(' ')}`;
         }
 
         function formatInterfaceEntries(entries) {
             return entries.map(entry => `${escapeHtml(entry.name)} (${entry.ip_addresses.map(ip => escapeHtml(ip)).join(', ')})`).join(' · ');
+        }
+
+        function mergeInterfaceEntries(entries) {
+            const merged = new Map();
+            for (const entry of entries) {
+                const current = merged.get(entry.name) || [];
+                for (const ip of entry.ip_addresses) {
+                    if (!current.includes(ip)) {
+                        current.push(ip);
+                    }
+                }
+                merged.set(entry.name, current);
+            }
+
+            return Array.from(merged.entries()).map(([name, ip_addresses]) => ({ name, ip_addresses }));
         }
 
         function collectMatchingInterfaces(host) {
@@ -3420,69 +3559,124 @@
             });
         }
 
-        function getListenTargetDescription(value, disabled) {
-            if (disabled) {
-                return '<strong>Bind target:</strong> Disabled';
-            }
-
-            const { host, port } = parseListenBinding(value);
-            const normalizedHost = normalizeListenHost(host);
-            if (!normalizedHost) {
-                return '<strong>Bind target:</strong> Enter an interface or IP address';
-            }
-
-            if (normalizedHost === '0.0.0.0' || normalizedHost === '::') {
-                const interfaces = collectWildcardInterfaces(normalizedHost);
-                const scope = normalizedHost === '::' ? 'All IPv6 interfaces' : 'All IPv4 interfaces';
-                if (interfaces.length === 0) {
-                    return `<strong>Bind target:</strong> ${scope}`;
+        function getFamilyEditState(prefix, family) {
+            const input = getPortInput(prefix, family);
+            const port = input.value.trim();
+            if (input.dataset.ambiguous === 'true') {
+                if (!port) {
+                    return { kind: 'preserve' };
                 }
-                return `<strong>Bind target:</strong> ${scope} — ${formatInterfaceEntries(interfaces)}`;
+                return { kind: 'ambiguous-edit', port };
             }
 
-            const matches = collectMatchingInterfaces(normalizedHost);
-            if (matches.length > 0) {
-                return `<strong>Bind target:</strong> ${formatInterfaceEntries(matches)}`;
+            if (input.dataset.mixed === 'true' && !port) {
+                return { kind: 'preserve' };
             }
 
-            return `<strong>Bind target:</strong> Custom address (${escapeHtml(formatListenAddress(host, port))})`;
+            if (!port) {
+                return { kind: 'disabled' };
+            }
+
+            return { kind: 'port', port };
         }
 
-        function updateListenTarget(inputId, disabled = false) {
-            const input = document.getElementById(inputId);
-            const target = document.getElementById(`${inputId}-target`);
-            if (!input || !target) return;
+        function describeInterfaceTargets(hosts, family) {
+            const uniqueHosts = [...new Set(hosts.filter(Boolean))];
+            const normalizedHosts = [...new Set(uniqueHosts.map(host => normalizeListenHost(host)).filter(Boolean))];
+            if (normalizedHosts.length === 0) {
+                return `Not listening on ${family === 'ipv4' ? 'IPv4' : 'IPv6'}`;
+            }
 
-            target.classList.toggle('is-disabled', disabled);
-            target.innerHTML = getListenTargetDescription(input.value, disabled);
+            if (normalizedHosts.includes(getFamilyWildcardHost(family))) {
+                const interfaces = mergeInterfaceEntries(collectWildcardInterfaces(getFamilyWildcardHost(family)));
+                const scope = family === 'ipv4' ? 'All IPv4 interfaces' : 'All IPv6 interfaces';
+                return interfaces.length > 0 ? `${scope} — ${formatInterfaceEntries(interfaces)}` : scope;
+            }
+
+            const matches = mergeInterfaceEntries(normalizedHosts.flatMap(host => collectMatchingInterfaces(host)));
+            if (matches.length > 0) {
+                return formatInterfaceEntries(matches);
+            }
+
+            return `Custom binding (${uniqueHosts.map(host => escapeHtml(host)).join(', ')})`;
+        }
+
+        function getListenTargetDescription(listener, family, disabled) {
+            if (disabled) {
+                return '<strong>Interfaces:</strong> Disabled';
+            }
+
+            const bindings = getFamilyBindings(getServerListenValues(listener))[family];
+            const state = getFamilyEditState(listener.prefix, family);
+            if (state.kind === 'disabled') {
+                return `<strong>Interfaces:</strong> Not listening on ${family === 'ipv4' ? 'IPv4' : 'IPv6'}`;
+            }
+
+            const hosts = bindings.length > 0
+                ? bindings.map(binding => binding.host)
+                : state.kind === 'port'
+                    ? [getFamilyWildcardHost(family)]
+                    : [];
+
+            let description = `<strong>Interfaces:</strong> ${describeInterfaceTargets(hosts, family)}`;
+            if (state.kind === 'preserve') {
+                description += '<br><strong>Ports:</strong> Mixed existing ports';
+            }
+            return description;
+        }
+
+        function updateListenTarget(listener, family, disabled = false) {
+            const target = document.getElementById(`${listener.prefix}-${family}-target`);
+            if (!target) return;
+
+            const state = getFamilyEditState(listener.prefix, family);
+            target.classList.toggle('is-disabled', disabled || state.kind === 'disabled');
+            target.innerHTML = getListenTargetDescription(listener, family, disabled);
         }
 
         function renderNetworkTargets() {
-            updateListenTarget('net-dns');
-            updateListenTarget('net-web');
-            updateListenTarget('net-dot', !document.getElementById('toggle-dot').checked);
-            updateListenTarget('net-doh', !document.getElementById('toggle-doh').checked);
-            updateListenTarget('net-doq', !document.getElementById('toggle-doq').checked);
+            for (const listener of NETWORK_LISTENERS) {
+                const disabled = listener.toggleId ? !document.getElementById(listener.toggleId).checked : false;
+                updateListenTarget(listener, 'ipv4', disabled);
+                updateListenTarget(listener, 'ipv6', disabled);
+            }
         }
 
         function arraysEqual(a, b) {
             return a.length === b.length && a.every((value, index) => value === b[index]);
         }
 
-        function buildDesiredListenValues(serverValues, inputId) {
-            const value = document.getElementById(inputId).value.trim();
-            return [value, ...serverValues.slice(1)];
-        }
+        function buildDesiredListenValues(listener) {
+            const serverValues = getServerListenValues(listener);
+            const familyStates = {
+                ipv4: getFamilyEditState(listener.prefix, 'ipv4'),
+                ipv6: getFamilyEditState(listener.prefix, 'ipv6'),
+            };
+            const desiredValues = [];
+            const seenFamilies = { ipv4: false, ipv6: false };
 
-        function buildDesiredOptionalListenValues(proto) {
-            const toggle = document.getElementById('toggle-' + proto);
-            if (!toggle.checked) {
-                return [];
+            for (const raw of serverValues) {
+                const binding = parseListenBinding(raw);
+                if (!binding.host) continue;
+                const family = isIpv6Host(binding.host) ? 'ipv6' : 'ipv4';
+                seenFamilies[family] = true;
+
+                const state = familyStates[family];
+                if (state.kind === 'preserve') {
+                    desiredValues.push(raw);
+                } else if (state.kind === 'port') {
+                    desiredValues.push(formatListenAddress(binding.host, state.port));
+                }
             }
 
-            const serverValues = serverNetworkState[proto + '_listen'] || [];
-            const value = document.getElementById('net-' + proto).value.trim();
-            return [value, ...serverValues.slice(1)];
+            for (const family of ['ipv4', 'ipv6']) {
+                const state = familyStates[family];
+                if (!seenFamilies[family] && state.kind === 'port') {
+                    desiredValues.push(formatListenAddress(getFamilyWildcardHost(family), state.port));
+                }
+            }
+
+            return desiredValues;
         }
 
         function buildReconfigureArgs(key, desiredValues, serverValues) {
@@ -3499,16 +3693,12 @@
 
         function getNetworkReconfigureChanges() {
             const changes = [];
-            const dnsServerValues = serverNetworkState.dns_listen || [];
-            const webServerValues = serverNetworkState.web_listen || [];
-
-            changes.push(...buildReconfigureArgs('dns.listen', buildDesiredListenValues(dnsServerValues, 'net-dns'), dnsServerValues));
-            changes.push(...buildReconfigureArgs('web.listen', buildDesiredListenValues(webServerValues, 'net-web'), webServerValues));
-
-            for (const proto of ['dot', 'doh', 'doq']) {
-                const serverValues = serverNetworkState[proto + '_listen'] || [];
-                const desiredValues = buildDesiredOptionalListenValues(proto);
-                changes.push(...buildReconfigureArgs('dns.' + proto + '_listen', desiredValues, serverValues));
+            for (const listener of NETWORK_LISTENERS) {
+                const serverValues = getServerListenValues(listener);
+                const desiredValues = listener.toggleId && !document.getElementById(listener.toggleId).checked
+                    ? []
+                    : buildDesiredListenValues(listener);
+                changes.push(...buildReconfigureArgs(listener.key, desiredValues, serverValues));
             }
 
             return changes;
@@ -3530,35 +3720,73 @@
         }
 
         function toggleProtocol(proto, enabled) {
-            const input = document.getElementById('net-' + proto);
-            input.disabled = !enabled;
-            if (enabled && !input.value.trim()) {
-                input.value = PROTO_DEFAULTS[proto];
+            const listener = NETWORK_LISTENERS.find(item => item.proto === proto);
+            if (!listener) return;
+
+            for (const family of ['ipv4', 'ipv6']) {
+                const input = getPortInput(listener.prefix, family);
+                input.disabled = !enabled;
             }
-            if (!enabled) {
-                input.value = '';
-            }
+
             checkNetworkChanges();
+        }
+
+        function getNetworkValidationError() {
+            for (const listener of NETWORK_LISTENERS) {
+                if (listener.toggleId && !document.getElementById(listener.toggleId).checked) {
+                    continue;
+                }
+
+                const ipv4State = getFamilyEditState(listener.prefix, 'ipv4');
+                const ipv6State = getFamilyEditState(listener.prefix, 'ipv6');
+                const activeStates = [ipv4State, ipv6State].filter(state => state.kind !== 'disabled');
+
+                for (const [family, state] of [['IPv4', ipv4State], ['IPv6', ipv6State]]) {
+                    if (state.kind === 'ambiguous-edit') {
+                        return `${listener.label} ${family} uses an unbracketed IPv6 listen address. Reconfigure it once with a bracketed address before editing the port here.`;
+                    }
+                    if (state.kind === 'port' && !isValidPort(state.port)) {
+                        return `${listener.label} ${family} port must be between 1 and 65535.`;
+                    }
+                }
+
+                if (listener.required && activeStates.length === 0) {
+                    return `${listener.label} requires an IPv4 or IPv6 port.`;
+                }
+
+                if (!listener.required && activeStates.length === 0) {
+                    return `${listener.label} requires an IPv4 or IPv6 port when enabled.`;
+                }
+            }
+
+            return null;
         }
 
         function checkNetworkChanges() {
             renderNetworkTargets();
             const changes = getNetworkReconfigureChanges();
             const banner = document.getElementById('reconfigBanner');
+            const validationError = getNetworkValidationError();
+            const changeSignature = JSON.stringify({ changes, validationError });
+
+            if (bannerDismissed && dismissedNetworkSignature && dismissedNetworkSignature !== changeSignature) {
+                bannerDismissed = false;
+                dismissedNetworkSignature = '';
+            }
 
             if (changes.length === 0) {
                 banner.classList.remove('visible', 'is-error');
                 bannerDismissed = false;
+                dismissedNetworkSignature = '';
                 stopNetworkPolling();
                 return;
             }
 
-            const validationError = getNetworkValidationError();
             if (validationError) {
                 setReconfigBannerState({
                     title: '⚠ Network settings incomplete',
                     description: validationError,
-                    command: 'Enter a valid listen address to generate a working reconfigure command.',
+                    command: 'Enter valid IPv4/IPv6 ports to generate a working reconfigure command.',
                     note: 'No command will be copied until the network settings are valid.',
                     canCopy: false,
                     isError: true,
@@ -3586,20 +3814,43 @@
         function dismissBanner() {
             document.getElementById('reconfigBanner').classList.remove('visible');
             bannerDismissed = true;
+            dismissedNetworkSignature = JSON.stringify({
+                changes: getNetworkReconfigureChanges(),
+                validationError: getNetworkValidationError(),
+            });
         }
 
         async function copyReconfigCmd() {
             const cmd = document.getElementById('reconfigCmd').textContent;
-            try {
-                await navigator.clipboard.writeText(cmd);
-                const btn = document.querySelector('.reconfig-btn-copy');
+            const btn = document.getElementById('reconfigCopyBtn');
+            if (!cmd || !btn) return;
+
+            const showCopied = () => {
                 btn.textContent = 'Copied!';
                 setTimeout(() => { btn.textContent = 'Copy'; }, 2000);
+            };
+
+            try {
+                await navigator.clipboard.writeText(cmd);
+                showCopied();
             } catch (_) {
-                const range = document.createRange();
-                range.selectNodeContents(document.getElementById('reconfigCmd'));
-                window.getSelection().removeAllRanges();
-                window.getSelection().addRange(range);
+                const ta = document.createElement('textarea');
+                ta.value = cmd;
+                ta.setAttribute('readonly', '');
+                ta.style.position = 'fixed';
+                ta.style.opacity = '0';
+                document.body.appendChild(ta);
+                ta.focus();
+                ta.select();
+
+                try {
+                    const copied = document.execCommand('copy');
+                    if (copied) {
+                        showCopied();
+                    }
+                } finally {
+                    document.body.removeChild(ta);
+                }
             }
         }
 
