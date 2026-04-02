@@ -1994,7 +1994,7 @@
                             <label class="toggle-switch"><input type="checkbox" id="toggle-dot"
                                     onchange="toggleProtocol('dot', this.checked)"><span
                                     class="toggle-slider"></span></label>
-                            <input type="text" id="net-dot" placeholder="0.0.0.0:853" disabled>
+                            <input type="text" id="net-dot" placeholder="0.0.0.0:853" oninput="checkNetworkChanges()" disabled>
                         </div>
                     </div>
                     <div class="network-field">
@@ -2003,7 +2003,7 @@
                             <label class="toggle-switch"><input type="checkbox" id="toggle-doh"
                                     onchange="toggleProtocol('doh', this.checked)"><span
                                     class="toggle-slider"></span></label>
-                            <input type="text" id="net-doh" placeholder="0.0.0.0:443" disabled>
+                            <input type="text" id="net-doh" placeholder="0.0.0.0:443" oninput="checkNetworkChanges()" disabled>
                         </div>
                     </div>
                     <div class="network-field">
@@ -2012,15 +2012,17 @@
                             <label class="toggle-switch"><input type="checkbox" id="toggle-doq"
                                     onchange="toggleProtocol('doq', this.checked)"><span
                                     class="toggle-slider"></span></label>
-                            <input type="text" id="net-doq" placeholder="0.0.0.0:853" disabled>
+                            <input type="text" id="net-doq" placeholder="0.0.0.0:853" oninput="checkNetworkChanges()" disabled>
                         </div>
                     </div>
-                    <div class="network-field" style="margin-top: 8px;">
+                    <div class="network-field">
                         <label>IPv6 (AAAA)</label>
-                        <label class="toggle-switch" id="toggle-ipv6">
-                            <input type="checkbox" id="ipv6Checkbox" onchange="toggleIpv6(this.checked)">
-                            <span class="toggle-slider"></span>
-                        </label>
+                        <div class="proto-toggle">
+                            <label class="toggle-switch" id="toggle-ipv6">
+                                <input type="checkbox" id="ipv6Checkbox" onchange="toggleIpv6(this.checked)">
+                                <span class="toggle-slider"></span>
+                            </label>
+                        </div>
                     </div>
                     <div class="reconfig-banner" id="reconfigBanner">
                         <div class="banner-title">&#9888; System command required</div>
@@ -3209,100 +3211,121 @@
         // ---- Network Settings ----
         let serverNetworkState = {};
         let networkPollTimer = null;
+        let networkInputsInitialized = false;
         let bannerDismissed = false;
         const PROTO_DEFAULTS = { dot: '0.0.0.0:853', doh: '0.0.0.0:443', doq: '0.0.0.0:853' };
 
-        async function refreshNetworkSettings() {
+        function syncNetworkInputsFromServer() {
+            document.getElementById('net-dns').value = (serverNetworkState.dns_listen || [])[0] || '';
+            document.getElementById('net-web').value = (serverNetworkState.web_listen || [])[0] || '';
+
+            for (const proto of ['dot', 'doh', 'doq']) {
+                const key = proto + '_listen';
+                const val = (serverNetworkState[key] || [])[0] || '';
+                const toggle = document.getElementById('toggle-' + proto);
+                const input = document.getElementById('net-' + proto);
+                const enabled = Boolean(val);
+
+                toggle.checked = enabled;
+                input.disabled = !enabled;
+                input.value = val;
+            }
+
+            networkInputsInitialized = true;
+        }
+
+        function arraysEqual(a, b) {
+            return a.length === b.length && a.every((value, index) => value === b[index]);
+        }
+
+        function buildDesiredListenValues(serverValues, inputId) {
+            const value = document.getElementById(inputId).value.trim();
+            return [value, ...serverValues.slice(1)];
+        }
+
+        function buildDesiredOptionalListenValues(proto) {
+            const toggle = document.getElementById('toggle-' + proto);
+            if (!toggle.checked) {
+                return [];
+            }
+
+            const serverValues = serverNetworkState[proto + '_listen'] || [];
+            const value = document.getElementById('net-' + proto).value.trim();
+            return [value, ...serverValues.slice(1)];
+        }
+
+        function buildReconfigureArgs(key, desiredValues, serverValues) {
+            if (arraysEqual(desiredValues, serverValues)) {
+                return [];
+            }
+
+            if (desiredValues.length === 0) {
+                return [key + '='];
+            }
+
+            return desiredValues.map(value => key + '=' + value);
+        }
+
+        function getNetworkReconfigureChanges() {
+            const changes = [];
+            const dnsServerValues = serverNetworkState.dns_listen || [];
+            const webServerValues = serverNetworkState.web_listen || [];
+
+            changes.push(...buildReconfigureArgs('dns.listen', buildDesiredListenValues(dnsServerValues, 'net-dns'), dnsServerValues));
+            changes.push(...buildReconfigureArgs('web.listen', buildDesiredListenValues(webServerValues, 'net-web'), webServerValues));
+
+            for (const proto of ['dot', 'doh', 'doq']) {
+                const serverValues = serverNetworkState[proto + '_listen'] || [];
+                const desiredValues = buildDesiredOptionalListenValues(proto);
+                changes.push(...buildReconfigureArgs('dns.' + proto + '_listen', desiredValues, serverValues));
+            }
+
+            return changes;
+        }
+
+        async function refreshNetworkSettings(forceSync = false) {
             try {
                 const res = await fetch('/api/system/network');
                 if (!res.ok) return;
                 serverNetworkState = await res.json();
-                document.getElementById('net-dns').value = (serverNetworkState.dns_listen || [])[0] || '';
-                document.getElementById('net-web').value = (serverNetworkState.web_listen || [])[0] || '';
 
-                for (const proto of ['dot', 'doh', 'doq']) {
-                    const key = proto + '_listen';
-                    const val = (serverNetworkState[key] || [])?.[0] || '';
-                    const toggle = document.getElementById('toggle-' + proto);
-                    const input = document.getElementById('net-' + proto);
-                    if (val) {
-                        toggle.checked = true;
-                        input.disabled = false;
-                        input.value = val;
-                    } else {
-                        toggle.checked = false;
-                        input.disabled = true;
-                        input.value = '';
-                    }
+                const hasPendingChanges = networkInputsInitialized && !forceSync && getNetworkReconfigureChanges().length > 0;
+                if (!hasPendingChanges) {
+                    syncNetworkInputsFromServer();
                 }
+
+                checkNetworkChanges();
             } catch (_) { }
         }
 
         function toggleProtocol(proto, enabled) {
             const input = document.getElementById('net-' + proto);
-            if (enabled) {
-                input.disabled = false;
-                if (!input.value) input.value = PROTO_DEFAULTS[proto];
-                saveProtocolChange();
-            } else {
-                input.disabled = true;
+            input.disabled = !enabled;
+            if (enabled && !input.value.trim()) {
+                input.value = PROTO_DEFAULTS[proto];
+            }
+            if (!enabled) {
                 input.value = '';
-                saveProtocolChange();
             }
-        }
-
-        async function saveProtocolChange() {
-            const body = {};
-            for (const proto of ['dot', 'doh', 'doq']) {
-                const key = proto + '_listen';
-                const toggle = document.getElementById('toggle-' + proto);
-                const input = document.getElementById('net-' + proto);
-                if (toggle.checked && input.value.trim()) {
-                    body[key] = input.value.trim();
-                } else {
-                    body[key] = null;
-                }
-            }
-
-            try {
-                const res = await fetch('/api/system/network', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(body),
-                });
-                if (res.ok) {
-                    setTimeout(refreshNetworkSettings, 3000);
-                }
-            } catch (_) { }
+            checkNetworkChanges();
         }
 
         function checkNetworkChanges() {
-            const fields = [
-                { id: 'net-dns', key: 'dns.listen', server: (serverNetworkState.dns_listen || [])[0] || '' },
-                { id: 'net-web', key: 'web.listen', server: (serverNetworkState.web_listen || [])[0] || '' },
-            ];
-
-            const changes = [];
-            for (const f of fields) {
-                const val = document.getElementById(f.id).value.trim();
-                if (val !== f.server) {
-                    changes.push(f.key + '=' + val);
-                }
-            }
-
+            const changes = getNetworkReconfigureChanges();
             const banner = document.getElementById('reconfigBanner');
+
             if (changes.length > 0) {
-                const cmd = 'sudo oxi-dns --reconfigure ' + changes.join(' ');
-                document.getElementById('reconfigCmd').textContent = cmd;
+                document.getElementById('reconfigCmd').textContent = 'sudo oxi-dns --reconfigure ' + changes.join(' ');
                 if (!bannerDismissed) {
                     banner.classList.add('visible');
-                    startNetworkPolling();
                 }
-            } else {
-                banner.classList.remove('visible');
-                bannerDismissed = false;
-                stopNetworkPolling();
+                startNetworkPolling();
+                return;
             }
+
+            banner.classList.remove('visible');
+            bannerDismissed = false;
+            stopNetworkPolling();
         }
 
         function dismissBanner() {
@@ -3329,7 +3352,6 @@
             if (networkPollTimer) return;
             networkPollTimer = setInterval(async () => {
                 await refreshNetworkSettings();
-                checkNetworkChanges();
             }, 5000);
         }
 
