@@ -450,6 +450,36 @@ fn make_cache_key(domain: &str, query_type: u16) -> (String, u16) {
     (normalized, query_type)
 }
 
+fn response_matches_name_and_type(
+    response: &hickory_proto::op::Message,
+    expected_name: &hickory_proto::rr::Name,
+    expected_type: hickory_proto::rr::RecordType,
+) -> bool {
+    response.queries().first().is_some_and(|query| {
+        make_cache_key(&query.name().to_ascii(), query.query_type().into())
+            == make_cache_key(&expected_name.to_ascii(), expected_type.into())
+    })
+}
+
+fn response_matches_query(
+    response: &hickory_proto::op::Message,
+    query: &hickory_proto::op::Query,
+) -> bool {
+    response_matches_name_and_type(response, query.name(), query.query_type())
+}
+
+fn response_bytes_match_name_and_type(
+    response_bytes: &[u8],
+    expected_name: &hickory_proto::rr::Name,
+    expected_type: hickory_proto::rr::RecordType,
+) -> bool {
+    use hickory_proto::serialize::binary::BinDecodable;
+
+    hickory_proto::op::Message::from_bytes(response_bytes)
+        .map(|response| response_matches_name_and_type(&response, expected_name, expected_type))
+        .unwrap_or(false)
+}
+
 /// Extract IP addresses from glue records (A and AAAA) in the additional section.
 fn extract_glue_records(
     response: &hickory_proto::op::Message,
@@ -536,7 +566,10 @@ impl UpstreamForwarder {
     }
 
     pub fn set_use_root_servers(&self, enabled: bool) {
-        self.use_root_servers.store(enabled, Ordering::Relaxed);
+        let was_enabled = self.use_root_servers.swap(enabled, Ordering::Relaxed);
+        if was_enabled != enabled {
+            self.cache_flush();
+        }
     }
 
     /// Get cache stats: (size, hits, misses).
@@ -691,19 +724,28 @@ impl UpstreamForwarder {
                     let key = make_cache_key(&q.name().to_ascii(), q.query_type().into());
                     if let Some(entry) = self.cache.get(&key) {
                         if !entry.is_expired() {
-                            let remaining = entry.expires_at.duration_since(Instant::now());
-                            if let Ok(rewritten) =
-                                rewrite_response_ttls(&entry.response_bytes, remaining)
-                            {
-                                // Rewrite the message ID to match the request
-                                let mut rewritten = rewritten;
-                                if rewritten.len() >= 2 {
-                                    let id_bytes = msg.header().id().to_be_bytes();
-                                    rewritten[0] = id_bytes[0];
-                                    rewritten[1] = id_bytes[1];
+                            if response_bytes_match_name_and_type(
+                                &entry.response_bytes,
+                                q.name(),
+                                q.query_type(),
+                            ) {
+                                let remaining = entry.expires_at.duration_since(Instant::now());
+                                if let Ok(rewritten) =
+                                    rewrite_response_ttls(&entry.response_bytes, remaining)
+                                {
+                                    // Rewrite the message ID to match the request
+                                    let mut rewritten = rewritten;
+                                    if rewritten.len() >= 2 {
+                                        let id_bytes = msg.header().id().to_be_bytes();
+                                        rewritten[0] = id_bytes[0];
+                                        rewritten[1] = id_bytes[1];
+                                    }
+                                    self.cache_hits.fetch_add(1, Ordering::Relaxed);
+                                    return Ok((rewritten, "cache".to_string()));
                                 }
-                                self.cache_hits.fetch_add(1, Ordering::Relaxed);
-                                return Ok((rewritten, "cache".to_string()));
+                            } else {
+                                drop(entry);
+                                self.cache.remove(&key);
                             }
                         } else {
                             drop(entry);
@@ -753,19 +795,27 @@ impl UpstreamForwarder {
                                             hickory_proto::op::Message::from_bytes(packet)
                                         {
                                             if let Some(q) = orig.queries().first() {
-                                                let key = make_cache_key(
-                                                    &q.name().to_ascii(),
-                                                    q.query_type().into(),
-                                                );
-                                                let ttl = extract_min_ttl(&resp_msg);
-                                                self.cache.insert(
-                                                    key,
-                                                    CacheEntry {
-                                                        response_bytes: response.clone(),
-                                                        expires_at: Instant::now()
-                                                            + Duration::from_secs(ttl as u64),
-                                                    },
-                                                );
+                                                if response_matches_query(&resp_msg, q) {
+                                                    let key = make_cache_key(
+                                                        &q.name().to_ascii(),
+                                                        q.query_type().into(),
+                                                    );
+                                                    let ttl = extract_min_ttl(&resp_msg);
+                                                    self.cache.insert(
+                                                        key,
+                                                        CacheEntry {
+                                                            response_bytes: response.clone(),
+                                                            expires_at: Instant::now()
+                                                                + Duration::from_secs(ttl as u64),
+                                                        },
+                                                    );
+                                                } else {
+                                                    warn!(
+                                                        "Skipping cache insert for mismatched upstream response to {} {:?}",
+                                                        q.name().to_ascii(),
+                                                        q.query_type()
+                                                    );
+                                                }
                                             }
                                         }
                                     }
@@ -792,15 +842,25 @@ impl UpstreamForwarder {
                 if is_cacheable_response(&resp_msg) {
                     if let Ok(orig) = hickory_proto::op::Message::from_bytes(packet) {
                         if let Some(q) = orig.queries().first() {
-                            let key = make_cache_key(&q.name().to_ascii(), q.query_type().into());
-                            let ttl = extract_min_ttl(&resp_msg);
-                            self.cache.insert(
-                                key,
-                                CacheEntry {
-                                    response_bytes: response_bytes.clone(),
-                                    expires_at: Instant::now() + Duration::from_secs(ttl as u64),
-                                },
-                            );
+                            if response_matches_query(&resp_msg, q) {
+                                let key =
+                                    make_cache_key(&q.name().to_ascii(), q.query_type().into());
+                                let ttl = extract_min_ttl(&resp_msg);
+                                self.cache.insert(
+                                    key,
+                                    CacheEntry {
+                                        response_bytes: response_bytes.clone(),
+                                        expires_at: Instant::now()
+                                            + Duration::from_secs(ttl as u64),
+                                    },
+                                );
+                            } else {
+                                warn!(
+                                    "Skipping cache insert for mismatched upstream response to {} {:?}",
+                                    q.name().to_ascii(),
+                                    q.query_type()
+                                );
+                            }
                         }
                     }
                 }
@@ -1079,13 +1139,24 @@ impl UpstreamForwarder {
         last_label: &str,
     ) -> anyhow::Result<(Vec<u8>, String)> {
         let full_packet = build_query(original_id, target_name, target_type, false)?;
-        if let Some((bytes, _)) = self.query_any_server(&full_packet, servers).await {
-            return Ok((bytes, format!("iterative({})", last_label)));
+        if let Some((bytes, response)) = self.query_any_server(&full_packet, servers).await {
+            if response_matches_name_and_type(&response, target_name, target_type) {
+                return Ok((bytes, format!("iterative({})", last_label)));
+            }
         }
-        Ok((
-            fallback_bytes.to_vec(),
-            format!("iterative({})", last_label),
-        ))
+
+        if response_bytes_match_name_and_type(fallback_bytes, target_name, target_type) {
+            return Ok((
+                fallback_bytes.to_vec(),
+                format!("iterative({})", last_label),
+            ));
+        }
+
+        anyhow::bail!(
+            "Iterative resolution: no response matching {} {:?}",
+            target_name.to_ascii(),
+            target_type
+        )
     }
 
     /// Resolve servers from a referral response: first try glue records from the
@@ -1683,6 +1754,7 @@ mod tests {
 #[cfg(test)]
 mod cache_tests {
     use super::*;
+    use hickory_proto::op::Query;
     use std::time::{Duration, Instant};
 
     #[test]
@@ -1951,5 +2023,84 @@ mod cache_tests {
         assert!(!parsed.answers().is_empty());
         assert!(parsed.answers()[0].ttl() <= 300);
         assert!(parsed.answers()[0].ttl() > 0);
+    }
+
+    #[test]
+    fn response_match_accepts_equivalent_question_name() {
+        use hickory_proto::op::{Header, Message, MessageType, ResponseCode};
+        use hickory_proto::rr::{Name, RecordType};
+
+        let expected = Name::from_ascii("Example.COM.").unwrap();
+
+        let mut response = Message::new();
+        let mut header = Header::new();
+        header.set_id(1);
+        header.set_message_type(MessageType::Response);
+        header.set_response_code(ResponseCode::NoError);
+        response.set_header(header);
+
+        let mut query = Query::new();
+        query.set_name(Name::from_ascii("example.com.").unwrap());
+        query.set_query_type(RecordType::A);
+        response.add_query(query);
+
+        assert!(response_matches_name_and_type(
+            &response,
+            &expected,
+            RecordType::A
+        ));
+    }
+
+    #[test]
+    fn response_match_rejects_mismatched_question_name() {
+        use hickory_proto::op::{Header, Message, MessageType, ResponseCode};
+        use hickory_proto::rr::{Name, RecordType};
+
+        let expected = Name::from_ascii("www.example.com.").unwrap();
+
+        let mut response = Message::new();
+        let mut header = Header::new();
+        header.set_id(1);
+        header.set_message_type(MessageType::Response);
+        header.set_response_code(ResponseCode::NoError);
+        response.set_header(header);
+
+        let mut query = Query::new();
+        query.set_name(Name::from_ascii("com.").unwrap());
+        query.set_query_type(RecordType::NS);
+        response.add_query(query);
+
+        assert!(!response_matches_name_and_type(
+            &response,
+            &expected,
+            RecordType::A
+        ));
+    }
+
+    #[test]
+    fn response_bytes_match_rejects_minimized_query_response() {
+        use hickory_proto::op::{Header, Message, MessageType, ResponseCode};
+        use hickory_proto::rr::{Name, RecordType};
+
+        let expected = Name::from_ascii("www.example.com.").unwrap();
+
+        let mut response = Message::new();
+        let mut header = Header::new();
+        header.set_id(1);
+        header.set_message_type(MessageType::Response);
+        header.set_response_code(ResponseCode::NoError);
+        response.set_header(header);
+
+        let mut query = Query::new();
+        query.set_name(Name::from_ascii("example.com.").unwrap());
+        query.set_query_type(RecordType::NS);
+        response.add_query(query);
+
+        let response_bytes = response.to_vec().unwrap();
+        assert!(!response_bytes_match_name_and_type(
+            &response_bytes,
+            &expected,
+            RecordType::A,
+        ));
     }
 }
