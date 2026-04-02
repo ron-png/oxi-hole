@@ -585,6 +585,10 @@ mod tests {
         // Ensure numeric, not lexicographic (10 > 9, not "10" < "9")
         assert!(version_newer("0.4.0.10", "0.4.0.2"));
         assert!(version_newer("0.4.10", "0.4.2"));
+        assert!(version_newer("0.4.0.15", "0.4.0.9"));
+        assert!(version_newer("0.4.0.15", "0.4.0.14"));
+        assert!(!version_newer("0.4.0.9", "0.4.0.15"));
+        assert!(!version_newer("0.4.0.15", "0.4.0.15"));
     }
 
     #[test]

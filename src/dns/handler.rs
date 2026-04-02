@@ -420,7 +420,7 @@ fn build_blocked_response(
     response
 }
 
-/// Build a CNAME rewrite response: returns CNAME record + resolved address records.
+/// Build a CNAME rewrite response: returns CNAME chain + resolved address records.
 async fn build_cname_rewrite_response(
     request: &Message,
     domain: &str,
@@ -430,34 +430,18 @@ async fn build_cname_rewrite_response(
 ) -> Option<Message> {
     use hickory_proto::op::Query;
 
-    // Resolve the CNAME target via upstream
+    const MAX_CNAME_HOPS: usize = 10;
+
+    let orig_name = Name::from_ascii(domain).ok()?;
     let cname_fqdn = format!("{}.", cname);
-    let target_name = Name::from_ascii(cname_fqdn).ok()?;
+    let mut current_target = Name::from_ascii(cname_fqdn).ok()?;
 
-    let mut resolve_req = Message::new();
-    let mut hdr = Header::new();
-    hdr.set_id(rand::random::<u16>());
-    hdr.set_message_type(MessageType::Query);
-    hdr.set_op_code(OpCode::Query);
-    hdr.set_recursion_desired(true);
-    resolve_req.set_header(hdr);
-
-    let mut query = Query::new();
-    query.set_name(target_name.clone());
-    query.set_query_type(query_type);
-    resolve_req.add_query(query);
-
-    let packet = resolve_req.to_vec().ok()?;
-    let (response_bytes, _) = upstream.forward(&packet).await.ok()?;
-    let upstream_resp = Message::from_bytes(&response_bytes).ok()?;
-
-    // Build our response with CNAME + address records
     let mut response = Message::new();
     let mut header = Header::new();
     header.set_id(request.header().id());
     header.set_message_type(MessageType::Response);
     header.set_op_code(request.header().op_code());
-    header.set_authoritative(false); // not authoritative for forwarded CNAME responses
+    header.set_authoritative(false);
     header.set_recursion_desired(request.header().recursion_desired());
     header.set_recursion_available(true);
     header.set_response_code(ResponseCode::NoError);
@@ -467,22 +451,74 @@ async fn build_cname_rewrite_response(
         response.add_query(q.clone());
     }
 
-    // Add CNAME record: domain -> cname target
-    let orig_name = Name::from_ascii(domain).unwrap_or_default();
-    let cname_rdata = RData::CNAME(hickory_proto::rr::rdata::CNAME(target_name));
+    let cname_rdata = RData::CNAME(hickory_proto::rr::rdata::CNAME(current_target.clone()));
     let cname_record = Record::from_rdata(orig_name, 3600, cname_rdata);
     response.add_answer(cname_record);
 
-    // Add address records from upstream resolution of the CNAME target
-    for answer in upstream_resp.answers() {
-        match (answer.data(), query_type) {
-            (RData::A(_), RecordType::A) | (RData::AAAA(_), RecordType::AAAA) => {
-                let mut record = answer.clone();
-                record.set_ttl(3600);
-                response.add_answer(record);
+    let mut cname_chain: Vec<Record<RData>> = Vec::new();
+    let mut address_records: Vec<Record<RData>> = Vec::new();
+    let mut seen_targets: std::collections::HashSet<String> = std::collections::HashSet::new();
+    seen_targets.insert(current_target.to_ascii().to_lowercase());
+
+    for _ in 0..MAX_CNAME_HOPS {
+        let mut resolve_req = Message::new();
+        let mut hdr = Header::new();
+        hdr.set_id(rand::random::<u16>());
+        hdr.set_message_type(MessageType::Query);
+        hdr.set_op_code(OpCode::Query);
+        hdr.set_recursion_desired(true);
+        resolve_req.set_header(hdr);
+
+        let mut query = Query::new();
+        query.set_name(current_target.clone());
+        query.set_query_type(query_type);
+        resolve_req.add_query(query);
+
+        let packet = resolve_req.to_vec().ok()?;
+        let (response_bytes, _) = upstream.forward(&packet).await.ok()?;
+        let upstream_resp = Message::from_bytes(&response_bytes).ok()?;
+
+        let mut found_cname = false;
+
+        for answer in upstream_resp.answers() {
+            match answer.data() {
+                RData::CNAME(cname_rdata) => {
+                    let target = cname_rdata.0.clone();
+                    let target_str = target.to_ascii().to_lowercase();
+                    if !seen_targets.contains(&target_str) {
+                        seen_targets.insert(target_str);
+                        let mut record = answer.clone();
+                        record.set_ttl(3600);
+                        cname_chain.push(record);
+                        current_target = target.clone();
+                        found_cname = true;
+                    }
+                }
+                RData::A(_) if query_type == RecordType::A => {
+                    let mut record = answer.clone();
+                    record.set_ttl(3600);
+                    address_records.push(record);
+                }
+                RData::AAAA(_) if query_type == RecordType::AAAA => {
+                    let mut record = answer.clone();
+                    record.set_ttl(3600);
+                    address_records.push(record);
+                }
+                _ => {}
             }
-            _ => {}
         }
+
+        if !address_records.is_empty() || !found_cname {
+            break;
+        }
+    }
+
+    for record in cname_chain {
+        response.add_answer(record);
+    }
+
+    for record in address_records {
+        response.add_answer(record);
     }
 
     echo_edns_opt(request, &mut response);

@@ -7,6 +7,9 @@ Supports plain DNS (UDP), DNS-over-TLS (DoT), DNS-over-HTTPS (DoH), and DNS-over
 > [!CAUTION]
 > **Early alpha** — under active development. Some features are not tested yet. Expect rough edges.
 
+> [!NOTE]
+> This project is mostly written by AI. If you're looking for a more reliable and battle-tested solution, check out [AdGuard Home](https://github.com/AdguardTeam/AdGuardHome).
+
 
 <img width="946" height="884" alt="SCR-20260401-olkk" src="https://github.com/user-attachments/assets/326ddda3-b1e8-48db-abc6-61672a6cadc6" />
 
