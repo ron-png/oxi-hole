@@ -1083,6 +1083,24 @@
 
         .network-field .proto-toggle label.toggle-switch {
             flex-shrink: 0;
+            width: 34px;
+            height: 18px;
+        }
+
+        .network-field .proto-toggle .toggle-slider {
+            border-radius: 18px;
+        }
+
+        .network-field .proto-toggle .toggle-slider:before {
+            height: 14px;
+            width: 14px;
+            left: 2px;
+            bottom: 2px;
+            border-radius: 50%;
+        }
+
+        .network-field .proto-toggle input:checked + .toggle-slider:before {
+            transform: translateX(16px);
         }
 
         .network-field .proto-toggle input[type="text"] {
