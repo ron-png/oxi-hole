@@ -66,6 +66,9 @@ pub fn parse_changes(args: &[String]) -> anyhow::Result<Vec<(String, String)>> {
                 VALID_KEYS.join(", ")
             );
         }
+        if matches!(key, "dns.listen" | "web.listen") && value.trim().is_empty() {
+            anyhow::bail!("{} requires a non-empty listen address", key);
+        }
         changes.push((key.to_string(), value.to_string()));
     }
     if changes.is_empty() {
@@ -303,6 +306,12 @@ mod tests {
     fn parse_unknown_key() {
         let result = parse_changes(&["unknown.key=value".to_string()]);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_empty_required_listen_rejected() {
+        assert!(parse_changes(&["dns.listen=".to_string()]).is_err());
+        assert!(parse_changes(&["web.listen=".to_string()]).is_err());
     }
 
     #[test]

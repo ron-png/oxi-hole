@@ -27,6 +27,7 @@ flate2 = "1"
 tar = "0.4"
 # SO_REUSEPORT for zero-downtime restarts
 socket2 = { version = "0.5", features = ["all"] }
+get_if_addrs = "0.5.3"
 
 # TLS
 rustls = { version = "0.23", features = ["ring"] }

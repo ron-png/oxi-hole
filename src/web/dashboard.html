@@ -1075,6 +1075,29 @@
             font-style: italic;
         }
 
+        .network-input-stack {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .listen-target {
+            margin-top: 6px;
+            font-size: 12px;
+            line-height: 1.4;
+            color: var(--text-muted);
+            white-space: normal;
+        }
+
+        .listen-target strong {
+            color: var(--text-secondary);
+            font-weight: 600;
+        }
+
+        .listen-target.is-disabled {
+            color: var(--text-muted);
+            opacity: 0.75;
+        }
+
         .network-field .proto-toggle {
             display: flex;
             align-items: center;
@@ -1125,11 +1148,20 @@
             display: block;
         }
 
+        .reconfig-banner.is-error {
+            background: rgba(239, 68, 68, 0.08);
+            border-color: rgba(239, 68, 68, 0.24);
+        }
+
         .reconfig-banner .banner-title {
             font-size: 13px;
             font-weight: 600;
             color: #eab308;
             margin-bottom: 8px;
+        }
+
+        .reconfig-banner.is-error .banner-title {
+            color: #f87171;
         }
 
         .reconfig-banner .banner-desc {
@@ -2000,11 +2032,17 @@
                     <h3>Network</h3>
                     <div class="network-field">
                         <label>DNS Server</label>
-                        <input type="text" id="net-dns" placeholder="0.0.0.0:53" oninput="checkNetworkChanges()">
+                        <div class="network-input-stack">
+                            <input type="text" id="net-dns" placeholder="0.0.0.0:53" oninput="checkNetworkChanges()">
+                            <div class="listen-target" id="net-dns-target"></div>
+                        </div>
                     </div>
                     <div class="network-field">
                         <label>Web Dashboard</label>
-                        <input type="text" id="net-web" placeholder="0.0.0.0:9853" oninput="checkNetworkChanges()">
+                        <div class="network-input-stack">
+                            <input type="text" id="net-web" placeholder="0.0.0.0:9853" oninput="checkNetworkChanges()">
+                            <div class="listen-target" id="net-web-target"></div>
+                        </div>
                     </div>
                     <div class="network-field">
                         <label>DNS-over-TLS</label>
@@ -2012,7 +2050,10 @@
                             <label class="toggle-switch"><input type="checkbox" id="toggle-dot"
                                     onchange="toggleProtocol('dot', this.checked)"><span
                                     class="toggle-slider"></span></label>
-                            <input type="text" id="net-dot" placeholder="0.0.0.0:853" oninput="checkNetworkChanges()" disabled>
+                            <div class="network-input-stack">
+                                <input type="text" id="net-dot" placeholder="0.0.0.0:853" oninput="checkNetworkChanges()" disabled>
+                                <div class="listen-target" id="net-dot-target"></div>
+                            </div>
                         </div>
                     </div>
                     <div class="network-field">
@@ -2021,7 +2062,10 @@
                             <label class="toggle-switch"><input type="checkbox" id="toggle-doh"
                                     onchange="toggleProtocol('doh', this.checked)"><span
                                     class="toggle-slider"></span></label>
-                            <input type="text" id="net-doh" placeholder="0.0.0.0:443" oninput="checkNetworkChanges()" disabled>
+                            <div class="network-input-stack">
+                                <input type="text" id="net-doh" placeholder="0.0.0.0:443" oninput="checkNetworkChanges()" disabled>
+                                <div class="listen-target" id="net-doh-target"></div>
+                            </div>
                         </div>
                     </div>
                     <div class="network-field">
@@ -2030,7 +2074,10 @@
                             <label class="toggle-switch"><input type="checkbox" id="toggle-doq"
                                     onchange="toggleProtocol('doq', this.checked)"><span
                                     class="toggle-slider"></span></label>
-                            <input type="text" id="net-doq" placeholder="0.0.0.0:853" oninput="checkNetworkChanges()" disabled>
+                            <div class="network-input-stack">
+                                <input type="text" id="net-doq" placeholder="0.0.0.0:853" oninput="checkNetworkChanges()" disabled>
+                                <div class="listen-target" id="net-doq-target"></div>
+                            </div>
                         </div>
                     </div>
                     <div class="network-field">
@@ -2043,14 +2090,14 @@
                         </div>
                     </div>
                     <div class="reconfig-banner" id="reconfigBanner">
-                        <div class="banner-title">&#9888; System command required</div>
-                        <div class="banner-desc">This change requires root privileges. Run this command in your
+                        <div class="banner-title" id="reconfigBannerTitle">&#9888; System command required</div>
+                        <div class="banner-desc" id="reconfigBannerDesc">This change requires root privileges. Run this command in your
                             terminal:</div>
                         <div class="banner-cmd" id="reconfigCmd"></div>
-                        <div class="banner-desc">The service will restart automatically.</div>
+                        <div class="banner-desc" id="reconfigBannerNote">The service will restart automatically.</div>
                         <div class="banner-actions">
                             <button class="reconfig-btn-dismiss" onclick="dismissBanner()">Dismiss</button>
-                            <button class="reconfig-btn-copy" onclick="copyReconfigCmd()">Copy</button>
+                            <button class="reconfig-btn-copy" id="reconfigCopyBtn" onclick="copyReconfigCmd()">Copy</button>
                         </div>
                     </div>
                 </div>
@@ -3250,6 +3297,172 @@
             }
 
             networkInputsInitialized = true;
+            renderNetworkTargets();
+        }
+
+        function normalizeListenHost(host) {
+            if (!host) return '';
+            const withoutBrackets = host.replace(/^\[(.*)\]$/, '$1');
+            return withoutBrackets.split('%')[0];
+        }
+
+        function parseListenBinding(value) {
+            const trimmed = (value || '').trim();
+            if (!trimmed) return { host: '', port: '' };
+
+            if (trimmed.startsWith('[')) {
+                const match = trimmed.match(/^\[([^\]]+)\](?::(\d+))?$/);
+                if (match) {
+                    return { host: match[1], port: match[2] || '' };
+                }
+            }
+
+            const colonCount = (trimmed.match(/:/g) || []).length;
+            if (colonCount > 1) {
+                return { host: trimmed, port: '' };
+            }
+
+            const lastColon = trimmed.lastIndexOf(':');
+            if (lastColon === -1) {
+                return { host: trimmed, port: '' };
+            }
+
+            return {
+                host: trimmed.slice(0, lastColon),
+                port: trimmed.slice(lastColon + 1),
+            };
+        }
+
+        function isIpv6Host(host) {
+            return normalizeListenHost(host).includes(':');
+        }
+
+        function formatListenAddress(host, port) {
+            if (!port) return host;
+            return isIpv6Host(host) ? `[${host}]:${port}` : `${host}:${port}`;
+        }
+
+        function shellQuote(value) {
+            return `'${String(value).replace(/'/g, `'"'"'`)}'`;
+        }
+
+        function setReconfigBannerState({ title, description, command, note, canCopy, isError = false }) {
+            const banner = document.getElementById('reconfigBanner');
+            const titleEl = document.getElementById('reconfigBannerTitle');
+            const descEl = document.getElementById('reconfigBannerDesc');
+            const cmdEl = document.getElementById('reconfigCmd');
+            const noteEl = document.getElementById('reconfigBannerNote');
+            const copyBtn = document.getElementById('reconfigCopyBtn');
+
+            titleEl.textContent = title;
+            descEl.textContent = description;
+            cmdEl.textContent = command;
+            noteEl.textContent = note;
+            copyBtn.style.display = canCopy ? '' : 'none';
+            banner.classList.toggle('is-error', isError);
+        }
+
+        function getNetworkValidationError() {
+            const requiredFields = [
+                { id: 'net-dns', label: 'DNS Server' },
+                { id: 'net-web', label: 'Web Dashboard' },
+            ];
+
+            for (const field of requiredFields) {
+                if (!document.getElementById(field.id).value.trim()) {
+                    return `${field.label} listen address is required.`;
+                }
+            }
+
+            for (const proto of ['dot', 'doh', 'doq']) {
+                const toggle = document.getElementById('toggle-' + proto);
+                const input = document.getElementById('net-' + proto);
+                if (toggle.checked && !input.value.trim()) {
+                    const label = proto === 'dot'
+                        ? 'DNS-over-TLS'
+                        : proto === 'doh'
+                            ? 'DNS-over-HTTPS'
+                            : 'DNS-over-QUIC';
+                    return `${label} listen address is required when enabled.`;
+                }
+            }
+
+            return null;
+        }
+
+        function buildReconfigureCommand(changes) {
+            return `sudo oxi-dns --reconfigure ${changes.map(shellQuote).join(' ')}`;
+        }
+
+        function formatInterfaceEntries(entries) {
+            return entries.map(entry => `${escapeHtml(entry.name)} (${entry.ip_addresses.map(ip => escapeHtml(ip)).join(', ')})`).join(' · ');
+        }
+
+        function collectMatchingInterfaces(host) {
+            const normalizedHost = normalizeListenHost(host);
+            return (serverNetworkState.interfaces || []).flatMap(entry => {
+                const matches = (entry.ip_addresses || []).filter(ip => normalizeListenHost(ip) === normalizedHost);
+                if (matches.length === 0) {
+                    return [];
+                }
+                return [{ name: entry.name, ip_addresses: matches }];
+            });
+        }
+
+        function collectWildcardInterfaces(host) {
+            const wantIpv6 = isIpv6Host(host);
+            return (serverNetworkState.interfaces || []).flatMap(entry => {
+                const ip_addresses = (entry.ip_addresses || []).filter(ip => isIpv6Host(ip) === wantIpv6);
+                if (ip_addresses.length === 0) {
+                    return [];
+                }
+                return [{ name: entry.name, ip_addresses }];
+            });
+        }
+
+        function getListenTargetDescription(value, disabled) {
+            if (disabled) {
+                return '<strong>Bind target:</strong> Disabled';
+            }
+
+            const { host, port } = parseListenBinding(value);
+            const normalizedHost = normalizeListenHost(host);
+            if (!normalizedHost) {
+                return '<strong>Bind target:</strong> Enter an interface or IP address';
+            }
+
+            if (normalizedHost === '0.0.0.0' || normalizedHost === '::') {
+                const interfaces = collectWildcardInterfaces(normalizedHost);
+                const scope = normalizedHost === '::' ? 'All IPv6 interfaces' : 'All IPv4 interfaces';
+                if (interfaces.length === 0) {
+                    return `<strong>Bind target:</strong> ${scope}`;
+                }
+                return `<strong>Bind target:</strong> ${scope} — ${formatInterfaceEntries(interfaces)}`;
+            }
+
+            const matches = collectMatchingInterfaces(normalizedHost);
+            if (matches.length > 0) {
+                return `<strong>Bind target:</strong> ${formatInterfaceEntries(matches)}`;
+            }
+
+            return `<strong>Bind target:</strong> Custom address (${escapeHtml(formatListenAddress(host, port))})`;
+        }
+
+        function updateListenTarget(inputId, disabled = false) {
+            const input = document.getElementById(inputId);
+            const target = document.getElementById(`${inputId}-target`);
+            if (!input || !target) return;
+
+            target.classList.toggle('is-disabled', disabled);
+            target.innerHTML = getListenTargetDescription(input.value, disabled);
+        }
+
+        function renderNetworkTargets() {
+            updateListenTarget('net-dns');
+            updateListenTarget('net-web');
+            updateListenTarget('net-dot', !document.getElementById('toggle-dot').checked);
+            updateListenTarget('net-doh', !document.getElementById('toggle-doh').checked);
+            updateListenTarget('net-doq', !document.getElementById('toggle-doq').checked);
         }
 
         function arraysEqual(a, b) {
@@ -3329,21 +3542,45 @@
         }
 
         function checkNetworkChanges() {
+            renderNetworkTargets();
             const changes = getNetworkReconfigureChanges();
             const banner = document.getElementById('reconfigBanner');
 
-            if (changes.length > 0) {
-                document.getElementById('reconfigCmd').textContent = 'sudo oxi-dns --reconfigure ' + changes.join(' ');
-                if (!bannerDismissed) {
-                    banner.classList.add('visible');
-                }
-                startNetworkPolling();
+            if (changes.length === 0) {
+                banner.classList.remove('visible', 'is-error');
+                bannerDismissed = false;
+                stopNetworkPolling();
                 return;
             }
 
-            banner.classList.remove('visible');
-            bannerDismissed = false;
-            stopNetworkPolling();
+            const validationError = getNetworkValidationError();
+            if (validationError) {
+                setReconfigBannerState({
+                    title: '⚠ Network settings incomplete',
+                    description: validationError,
+                    command: 'Enter a valid listen address to generate a working reconfigure command.',
+                    note: 'No command will be copied until the network settings are valid.',
+                    canCopy: false,
+                    isError: true,
+                });
+                if (!bannerDismissed) {
+                    banner.classList.add('visible');
+                }
+                stopNetworkPolling();
+                return;
+            }
+
+            setReconfigBannerState({
+                title: '⚠ System command required',
+                description: 'This change requires root privileges. Run this command in your terminal:',
+                command: buildReconfigureCommand(changes),
+                note: 'The service will restart automatically.',
+                canCopy: true,
+            });
+            if (!bannerDismissed) {
+                banner.classList.add('visible');
+            }
+            startNetworkPolling();
         }
 
         function dismissBanner() {

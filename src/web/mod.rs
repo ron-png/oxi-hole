@@ -18,6 +18,7 @@ use axum::Router;
 use dashmap::DashMap;
 use futures::stream::Stream;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -630,6 +631,7 @@ async fn api_system_network(
     }
 
     let config = Config::load(&state.config_path).unwrap_or_default();
+    let interfaces = get_network_interfaces();
 
     Json(serde_json::json!({
         "dns_listen": config.dns.listen,
@@ -637,15 +639,62 @@ async fn api_system_network(
         "dot_listen": config.dns.dot_listen,
         "doh_listen": config.dns.doh_listen,
         "doq_listen": config.dns.doq_listen,
+        "interfaces": interfaces,
     }))
     .into_response()
 }
 
+#[derive(Serialize)]
+struct NetworkInterfaceInfo {
+    name: String,
+    ip_addresses: Vec<String>,
+}
+
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct UpdateNetworkRequest {
+    dns_listen: Option<serde_json::Value>,
+    web_listen: Option<serde_json::Value>,
     dot_listen: Option<serde_json::Value>,
     doh_listen: Option<serde_json::Value>,
     doq_listen: Option<serde_json::Value>,
+}
+
+fn parse_optional_listen_value(
+    value: &serde_json::Value,
+) -> Result<Option<Vec<String>>, &'static str> {
+    match value {
+        serde_json::Value::Null => Ok(None),
+        serde_json::Value::String(s) => {
+            let trimmed = s.trim();
+            if trimmed.is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(vec![trimmed.to_string()]))
+            }
+        }
+        serde_json::Value::Array(values) => {
+            let mut parsed = Vec::new();
+            for value in values {
+                match value {
+                    serde_json::Value::String(s) => {
+                        let trimmed = s.trim();
+                        if !trimmed.is_empty() {
+                            parsed.push(trimmed.to_string());
+                        }
+                    }
+                    _ => return Err("listen values must be strings or null"),
+                }
+            }
+
+            if parsed.is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(parsed))
+            }
+        }
+        _ => Err("listen values must be a string, an array of strings, or null"),
+    }
 }
 
 async fn api_update_network(
@@ -668,28 +717,50 @@ async fn api_update_network(
         }
     };
 
+    if req.dns_listen.is_some() || req.web_listen.is_some() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": "dns_listen and web_listen must be changed with the reconfigure command shown in the dashboard"
+            })),
+        )
+            .into_response();
+    }
+
     if let Some(ref val) = req.dot_listen {
-        config.dns.dot_listen = match val {
-            serde_json::Value::Null => None,
-            serde_json::Value::String(s) if s.is_empty() => None,
-            serde_json::Value::String(s) => Some(vec![s.clone()]),
-            _ => config.dns.dot_listen.clone(),
+        config.dns.dot_listen = match parse_optional_listen_value(val) {
+            Ok(listen) => listen,
+            Err(error) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({ "error": error })),
+                )
+                    .into_response();
+            }
         };
     }
     if let Some(ref val) = req.doh_listen {
-        config.dns.doh_listen = match val {
-            serde_json::Value::Null => None,
-            serde_json::Value::String(s) if s.is_empty() => None,
-            serde_json::Value::String(s) => Some(vec![s.clone()]),
-            _ => config.dns.doh_listen.clone(),
+        config.dns.doh_listen = match parse_optional_listen_value(val) {
+            Ok(listen) => listen,
+            Err(error) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({ "error": error })),
+                )
+                    .into_response();
+            }
         };
     }
     if let Some(ref val) = req.doq_listen {
-        config.dns.doq_listen = match val {
-            serde_json::Value::Null => None,
-            serde_json::Value::String(s) if s.is_empty() => None,
-            serde_json::Value::String(s) => Some(vec![s.clone()]),
-            _ => config.dns.doq_listen.clone(),
+        config.dns.doq_listen = match parse_optional_listen_value(val) {
+            Ok(listen) => listen,
+            Err(error) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({ "error": error })),
+                )
+                    .into_response();
+            }
         };
     }
 
@@ -703,14 +774,50 @@ async fn api_update_network(
 
     let _ = state.restart_signal.send(true);
 
+    let interfaces = get_network_interfaces();
+
     Json(serde_json::json!({
         "dns_listen": config.dns.listen,
         "web_listen": config.web.listen,
         "dot_listen": config.dns.dot_listen,
         "doh_listen": config.dns.doh_listen,
         "doq_listen": config.dns.doq_listen,
+        "interfaces": interfaces,
     }))
     .into_response()
+}
+
+fn get_network_interfaces() -> Vec<NetworkInterfaceInfo> {
+    let mut interfaces = BTreeMap::<String, Vec<String>>::new();
+
+    let Ok(addrs) = get_if_addrs::get_if_addrs() else {
+        return Vec::new();
+    };
+
+    for iface in addrs {
+        let ip = iface.ip();
+        if ip.is_unspecified() || ip.is_multicast() {
+            continue;
+        }
+
+        let ip_addresses = interfaces.entry(iface.name).or_default();
+        let ip_text = ip.to_string();
+        if !ip_addresses.contains(&ip_text) {
+            ip_addresses.push(ip_text);
+        }
+    }
+
+    interfaces
+        .into_iter()
+        .filter_map(|(name, mut ip_addresses)| {
+            if ip_addresses.is_empty() {
+                return None;
+            }
+
+            ip_addresses.sort();
+            Some(NetworkInterfaceInfo { name, ip_addresses })
+        })
+        .collect()
 }
 
 fn get_local_ip() -> Option<String> {
