@@ -2015,6 +2015,13 @@
                             <input type="text" id="net-doq" placeholder="0.0.0.0:853" disabled>
                         </div>
                     </div>
+                    <div class="network-field" style="margin-top: 8px;">
+                        <label>IPv6 (AAAA)</label>
+                        <label class="toggle-switch" id="toggle-ipv6">
+                            <input type="checkbox" id="ipv6Checkbox" onchange="toggleIpv6(this.checked)">
+                            <span class="toggle-slider"></span>
+                        </label>
+                    </div>
                     <div class="reconfig-banner" id="reconfigBanner">
                         <div class="banner-title">&#9888; System command required</div>
                         <div class="banner-desc">This change requires root privileges. Run this command in your
@@ -2105,17 +2112,6 @@
                         <option value="stable">Stable</option>
                         <option value="development">Development</option>
                     </select>
-                </div>
-                <div class="setting-row">
-                    <div class="setting-info">
-                        <h3>IPv6 (AAAA)</h3>
-                        <p>Include IPv6 records in DNS responses. Disable on IPv4-only networks to prevent
-                            clients from attempting unreachable IPv6 connections.</p>
-                    </div>
-                    <label class="toggle-switch manage-system-only" id="toggle-ipv6">
-                        <input type="checkbox" id="ipv6Checkbox" onchange="toggleIpv6(this.checked)">
-                        <span class="toggle-slider"></span>
-                    </label>
                 </div>
                 <div class="version-box">
                     <div class="version-row">
