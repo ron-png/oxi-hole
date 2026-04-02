@@ -997,9 +997,18 @@ domain-only.example.com
     async fn test_is_blocked() {
         let mgr = BlocklistManager::new(true);
         mgr.load(&[], &["ads.example.com".to_string()], &[]).await;
-        assert!(!matches!(mgr.check_domain("ads.example.com").await, BlockResult::Allowed));
-        assert!(!matches!(mgr.check_domain("sub.ads.example.com").await, BlockResult::Allowed));
-        assert!(matches!(mgr.check_domain("example.com").await, BlockResult::Allowed));
+        assert!(!matches!(
+            mgr.check_domain("ads.example.com").await,
+            BlockResult::Allowed
+        ));
+        assert!(!matches!(
+            mgr.check_domain("sub.ads.example.com").await,
+            BlockResult::Allowed
+        ));
+        assert!(matches!(
+            mgr.check_domain("example.com").await,
+            BlockResult::Allowed
+        ));
     }
 
     #[tokio::test]
@@ -1011,14 +1020,20 @@ domain-only.example.com
             &["ads.example.com".to_string()],
         )
         .await;
-        assert!(matches!(mgr.check_domain("ads.example.com").await, BlockResult::Allowed));
+        assert!(matches!(
+            mgr.check_domain("ads.example.com").await,
+            BlockResult::Allowed
+        ));
     }
 
     #[tokio::test]
     async fn test_blocking_disabled() {
         let mgr = BlocklistManager::new(false);
         mgr.load(&[], &["ads.example.com".to_string()], &[]).await;
-        assert!(matches!(mgr.check_domain("ads.example.com").await, BlockResult::Allowed));
+        assert!(matches!(
+            mgr.check_domain("ads.example.com").await,
+            BlockResult::Allowed
+        ));
     }
 
     #[tokio::test]
@@ -1026,13 +1041,22 @@ domain-only.example.com
         let mgr = BlocklistManager::new(true);
         mgr.load(&[], &["base.example.com".to_string()], &[]).await;
 
-        assert!(!matches!(mgr.check_domain("base.example.com").await, BlockResult::Allowed));
+        assert!(!matches!(
+            mgr.check_domain("base.example.com").await,
+            BlockResult::Allowed
+        ));
         assert_eq!(mgr.blocked_count().await, 1);
 
         mgr.add_custom_blocked("new.example.com").await;
-        assert!(!matches!(mgr.check_domain("new.example.com").await, BlockResult::Allowed));
+        assert!(!matches!(
+            mgr.check_domain("new.example.com").await,
+            BlockResult::Allowed
+        ));
 
         mgr.remove_custom_blocked("new.example.com").await;
-        assert!(matches!(mgr.check_domain("new.example.com").await, BlockResult::Allowed));
+        assert!(matches!(
+            mgr.check_domain("new.example.com").await,
+            BlockResult::Allowed
+        ));
     }
 }
