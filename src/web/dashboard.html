@@ -393,46 +393,70 @@
         }
 
         .feature-icon {
-            width: 44px;
-            height: 44px;
-            border-radius: 6px;
+            width: 48px;
+            height: 48px;
+            border-radius: 14px;
             display: flex;
             align-items: center;
             justify-content: center;
-            font-size: 1.2rem;
             flex-shrink: 0;
-            background: var(--accent-dim);
+            position: relative;
+            overflow: hidden;
+            border: 1px solid rgba(255, 255, 255, 0.06);
+            background: linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.02));
             color: var(--accent);
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
         }
 
-        .feature-icon.shield {
-            background: rgba(109, 152, 204, 0.1);
-            color: var(--color-slate);
+        .feature-icon::after {
+            content: '';
+            position: absolute;
+            inset: 0;
+            border-radius: inherit;
+            background: radial-gradient(circle at top, rgba(255, 255, 255, 0.16), transparent 62%);
+            pointer-events: none;
         }
 
-        .feature-icon.eye-off {
-            background: var(--accent-dim);
-            color: var(--accent);
+        .feature-icon svg {
+            width: 22px;
+            height: 22px;
+            position: relative;
+            z-index: 1;
+            stroke: currentColor;
+            stroke-width: 1.8;
+            stroke-linecap: round;
+            stroke-linejoin: round;
+            fill: none;
         }
 
-        .feature-icon.search {
-            background: rgba(52, 211, 153, 0.1);
-            color: var(--color-green);
+        .feature-icon[data-feature="ads_malware"] {
+            background: linear-gradient(180deg, rgba(109, 152, 204, 0.18), rgba(109, 152, 204, 0.05));
+            border-color: rgba(109, 152, 204, 0.22);
+            color: #9cc2ff;
         }
 
-        .feature-icon.users {
-            background: rgba(251, 146, 60, 0.1);
-            color: var(--color-orange);
+        .feature-icon[data-feature="nsfw"] {
+            background: linear-gradient(180deg, rgba(239, 100, 97, 0.18), rgba(239, 100, 97, 0.05));
+            border-color: rgba(239, 100, 97, 0.18);
+            color: #ff908b;
         }
 
-        .feature-icon.dice {
-            background: rgba(244, 114, 182, 0.1);
-            color: #f472b6;
+        .feature-icon[data-feature="safe_search"] {
+            background: linear-gradient(180deg, rgba(52, 211, 153, 0.18), rgba(52, 211, 153, 0.05));
+            border-color: rgba(52, 211, 153, 0.2);
+            color: #6ce9ba;
         }
 
-        .feature-icon.cpu {
-            background: rgba(251, 191, 36, 0.1);
-            color: #fbbf24;
+        .feature-icon[data-feature="youtube_safe_search"] {
+            background: linear-gradient(180deg, rgba(229, 168, 53, 0.18), rgba(229, 168, 53, 0.05));
+            border-color: rgba(229, 168, 53, 0.22);
+            color: #ffd26d;
+        }
+
+        .feature-icon[data-feature="root_servers"] {
+            background: linear-gradient(180deg, rgba(0, 212, 170, 0.18), rgba(0, 212, 170, 0.05));
+            border-color: rgba(0, 212, 170, 0.18);
+            color: #67f0d1;
         }
 
         .feature-info {
@@ -1729,23 +1753,19 @@
             <h1>Oxi<span>-DNS</span></h1>
             <div class="header-right">
                 <div class="mode-toggle">
-                    <button id="modeSimple" class="active" onclick="setMode('simple')">Home</button>
-                    <button id="modeLogs" onclick="setMode('logs')">Logs</button>
-                    <button id="modeAdvanced" onclick="setMode('advanced')">Advanced</button>
+                    <button type="button" id="modeSimple" class="active" onclick="setMode('simple')">Home</button>
+                    <button type="button" id="modeLogs" onclick="setMode('logs')">Logs</button>
+                    <button type="button" id="modeAdvanced" onclick="setMode('advanced')">Advanced</button>
                 </div>
-                <button id="masterToggle" class="master-toggle enabled" onclick="toggleMasterBlocking()">
-                    Protection: ON
-                </button>
+                <button type="button" id="masterToggle" class="master-toggle enabled" onclick="toggleMasterBlocking()">Protection: ON</button>
                 <div class="user-menu" id="userMenu">
-                    <button class="user-menu-btn" id="userMenuBtn" onclick="toggleUserMenu(event)">
-                        <span id="userMenuName">...</span>
-                    </button>
+                    <button type="button" class="user-menu-btn" id="userMenuBtn" onclick="toggleUserMenu(event)"><span id="userMenuName">...</span></button>
                     <div class="user-menu-dropdown" id="userMenuDropdown">
-                        <button class="user-menu-item" onclick="showTokensSection()">API Tokens</button>
-                        <button class="user-menu-item manage-users-only" onclick="showUsersSection()">Users</button>
+                        <button type="button" class="user-menu-item" onclick="showTokensSection()">API Tokens</button>
+                        <button type="button" class="user-menu-item manage-users-only" onclick="showUsersSection()">Users</button>
                         <div class="user-menu-divider"></div>
-                        <button class="user-menu-item" onclick="showChangePasswordModal()">Change Password</button>
-                        <button class="user-menu-item danger" onclick="signOut()">Sign Out</button>
+                        <button type="button" class="user-menu-item" onclick="showChangePasswordModal()">Change Password</button>
+                        <button type="button" class="user-menu-item danger" onclick="signOut()">Sign Out</button>
                     </div>
                 </div>
             </div>
@@ -1759,9 +1779,9 @@
             <div style="display: flex; justify-content: space-between; align-items: center;">
                 <span id="updateNotificationText"></span>
                 <div>
-                    <button class="btn btn-sm" id="showLogsBtn" onclick="toggleUpdateLogs()" style="display: none;">Show
+                    <button type="button" class="btn btn-sm" id="showLogsBtn" onclick="toggleUpdateLogs()" style="display: none;">Show
                         Logs</button>
-                    <button class="btn btn-sm" id="dismissUpdateBtn" onclick="dismissUpdateStatus()"
+                    <button type="button" class="btn btn-sm" id="dismissUpdateBtn" onclick="dismissUpdateStatus()"
                         style="display: none;">Dismiss</button>
                 </div>
             </div>
@@ -1798,7 +1818,7 @@
                     data-tooltip="Percentage of queries answered from cache instead of forwarding to upstream DNS servers. Higher is better.">
                     Hit Rate</div>
                 <div class="value pct" id="cacheHitRate">0.0%</div>
-                <button class="btn btn-danger btn-sm" style="margin-top:12px;" onclick="flushCache()">Flush
+                <button type="button" class="btn btn-danger btn-sm" style="margin-top:12px;" onclick="flushCache()">Flush
                     Cache</button>
             </div>
         </div>
@@ -1836,7 +1856,7 @@
                             <input type="checkbox" id="logsAutoRefresh" onchange="toggleLogsAutoRefresh(this.checked)">
                             Auto-refresh
                         </label>
-                        <button class="btn btn-sm" id="logsRefreshBtn" onclick="resetAndLoadLogs()">Refresh</button>
+                        <button type="button" class="btn btn-sm" id="logsRefreshBtn" onclick="resetAndLoadLogs()">Refresh</button>
                     </div>
                 </div>
 
@@ -1851,7 +1871,7 @@
                         <input type="number" id="statsRetentionInput" min="1" max="365" value="90">
                         days
                     </label>
-                    <button class="btn btn-sm" onclick="saveLogSettings()">Save</button>
+                    <button type="button" class="btn btn-sm" onclick="saveLogSettings()">Save</button>
                     <label style="margin-left: auto;">
                         <input type="checkbox" id="logAnonIpCheckbox" onchange="saveLogSettings()">
                         Anonymize client IPs
@@ -1940,7 +1960,7 @@
                     <div class="add-domain" style="margin-bottom: 8px;">
                         <input type="text" id="customIpv4" placeholder="IPv4 (e.g. 192.168.1.1)" style="flex:1;" />
                         <input type="text" id="customIpv6" placeholder="IPv6 (e.g. ::1)" style="flex:1;" />
-                        <button class="btn btn-accent" onclick="saveCustomIp()">Save</button>
+                        <button type="button" class="btn btn-accent" onclick="saveCustomIp()">Save</button>
                     </div>
                 </div>
             </div>
@@ -1949,7 +1969,7 @@
                 <h2>Block Domain</h2>
                 <div class="add-domain manage-blocklists-only">
                     <input type="text" id="domainInput" placeholder="e.g. ads.example.com" />
-                    <button class="btn btn-accent" onclick="addBlocked()">Block</button>
+                    <button type="button" class="btn btn-accent" onclick="addBlocked()">Block</button>
                 </div>
                 <ul class="upstream-list" id="customBlockedList"></ul>
             </div>
@@ -1958,7 +1978,7 @@
                 <h2>Allow Domain</h2>
                 <div class="add-domain manage-allowlist-only">
                     <input type="text" id="allowInput" placeholder="e.g. safe.example.com" />
-                    <button class="btn btn-green" onclick="addAllowlisted()">Allow</button>
+                    <button type="button" class="btn btn-green" onclick="addAllowlisted()">Allow</button>
                 </div>
                 <ul class="upstream-list" id="allowlistList"></ul>
             </div>
@@ -1967,14 +1987,14 @@
                 <h2>Blocklist Sources</h2>
                 <div class="add-domain manage-blocklists-only">
                     <input type="text" id="blocklistUrlInput" placeholder="https://example.com/blocklist.txt" />
-                    <button class="btn btn-accent" onclick="addBlocklistUrl()">Add Blocklist</button>
+                    <button type="button" class="btn btn-accent" onclick="addBlocklistUrl()">Add Blocklist</button>
                 </div>
                 <ul class="upstream-list" id="activeBlocklists">
                     <li>Loading...</li>
                 </ul>
                 <div class="refresh-row">
                     <span class="last-refreshed" id="lastRefreshedText">Last refreshed: never</span>
-                    <button class="btn-refresh" id="refreshNowBtn" onclick="triggerRefresh()">&#8635; Refresh
+                    <button type="button" class="btn-refresh" id="refreshNowBtn" onclick="triggerRefresh()">&#8635; Refresh
                         Now</button>
                 </div>
                 <div class="interval-row">
@@ -2004,7 +2024,7 @@
                 <div id="upstreamControls">
                     <div class="add-domain manage-upstreams-only">
                         <input type="text" id="upstreamInput" placeholder="e.g. tls://1.1.1.1 or 8.8.8.8" />
-                        <button class="btn btn-accent" onclick="addUpstream()">Add</button>
+                        <button type="button" class="btn btn-accent" onclick="addUpstream()">Add</button>
                     </div>
                     <ul class="upstream-list" id="upstreamList">
                         <li>Loading...</li>
@@ -2017,7 +2037,7 @@
                 <h2>User Management</h2>
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
                     <span style="font-size: 13px; color: var(--text-muted);">Manage user accounts and permissions</span>
-                    <button class="btn btn-accent btn-sm" onclick="showAddUserModal()">Add User</button>
+                    <button type="button" class="btn btn-accent btn-sm" onclick="showAddUserModal()">Add User</button>
                 </div>
                 <table>
                     <thead>
@@ -2039,7 +2059,7 @@
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
                     <span style="font-size: 13px; color: var(--text-muted);">Personal access tokens for API
                         authentication</span>
-                    <button class="btn btn-accent btn-sm" onclick="showCreateTokenModal()">Create Token</button>
+                    <button type="button" class="btn btn-accent btn-sm" onclick="showCreateTokenModal()">Create Token</button>
                 </div>
                 <table>
                     <thead>
@@ -2177,8 +2197,8 @@
                         <div class="banner-cmd" id="reconfigCmd"></div>
                         <div class="banner-desc" id="reconfigBannerNote">The service will restart automatically.</div>
                         <div class="banner-actions">
-                            <button class="reconfig-btn-dismiss" onclick="dismissBanner()">Dismiss</button>
-                            <button class="reconfig-btn-copy" id="reconfigCopyBtn" onclick="copyReconfigCmd()">Copy</button>
+                            <button type="button" class="reconfig-btn-dismiss" onclick="dismissBanner()">Dismiss</button>
+                            <button type="button" class="reconfig-btn-copy" id="reconfigCopyBtn" onclick="copyReconfigCmd()">Copy</button>
                         </div>
                     </div>
                 </div>
@@ -2202,8 +2222,8 @@
                     </div>
                     <div class="tls-upload">
                         <div class="tls-tabs">
-                            <button class="tls-tab active" onclick="switchTlsTab('pem')">PEM</button>
-                            <button class="tls-tab" onclick="switchTlsTab('p12')">PKCS12</button>
+                            <button type="button" class="tls-tab active" onclick="switchTlsTab('pem')">PEM</button>
+                            <button type="button" class="tls-tab" onclick="switchTlsTab('p12')">PKCS12</button>
                         </div>
                         <div id="tls-pem-fields">
                             <div class="tls-file-input">
@@ -2227,8 +2247,8 @@
                             <input type="password" id="tlsPassword" placeholder="Certificate password">
                         </div>
                         <div class="tls-actions">
-                            <button class="btn btn-sm" onclick="uploadTlsCert()">Upload</button>
-                            <button class="btn btn-sm" id="tlsRemoveBtn" onclick="removeTlsCert()"
+                            <button type="button" class="btn btn-sm" onclick="uploadTlsCert()">Upload</button>
+                            <button type="button" class="btn btn-sm" id="tlsRemoveBtn" onclick="removeTlsCert()"
                                 style="display:none;">Remove &amp; use self-signed</button>
                         </div>
                         <div class="tls-msg" id="tlsMsg"></div>
@@ -2269,9 +2289,9 @@
                             <span id="versionStatus" class="version-status"></span>
                         </div>
                         <div class="version-actions">
-                            <button class="btn btn-sm" id="checkUpdateBtn" onclick="checkForUpdates()">Check for
+                            <button type="button" class="btn btn-sm" id="checkUpdateBtn" onclick="checkForUpdates()">Check for
                                 Updates</button>
-                            <button class="btn btn-green btn-sm" id="doUpdateBtn" onclick="performUpdate()"
+                            <button type="button" class="btn btn-green btn-sm" id="doUpdateBtn" onclick="performUpdate()"
                                 style="display: none;">Update</button>
                         </div>
                     </div>
@@ -2292,10 +2312,17 @@
 
     <script>
         const FEATURE_ICONS = {
-            'shield': '&#128737;',
-            'eye-off': '&#128683;',
-            'search': '&#128269;'
+            ads_malware: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7 4v5c0 5-3.5 8.5-7 10-3.5-1.5-7-5-7-10V7l7-4Z"></path><path d="m9.5 12 1.7 1.7 3.8-4.2"></path></svg>',
+            nsfw: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.7-6 10-6 10 6 10 6-3.7 6-10 6-10-6-10-6Z"></path><path d="M4 4l16 16"></path><path d="M10.6 10.7a2.3 2.3 0 0 0 2.7 2.7"></path></svg>',
+            safe_search: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="4.5"></circle><path d="m14 14 4.5 4.5"></path><path d="M10.5 8.5v4"></path><path d="M8.5 10.5h4"></path></svg>',
+            youtube_safe_search: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l6.5 3.8v5.3c0 4.6-3.2 7.8-6.5 9.3-3.3-1.5-6.5-4.7-6.5-9.3V6.8L12 3Z"></path><path d="m10.3 9.3 4.8 2.7-4.8 2.7Z" fill="currentColor" stroke="none"></path></svg>',
+            root_servers: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="7"></circle><path d="M12 5v14"></path><path d="M5 12h14"></path><path d="M7.5 7.5c1.4 1 2.2 2.7 2.2 4.5s-.8 3.5-2.2 4.5"></path><path d="M16.5 7.5c-1.4 1-2.2 2.7-2.2 4.5s.8 3.5 2.2 4.5"></path></svg>',
+            default: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="7"></circle><path d="M12 8v4"></path><path d="M12 16h.01"></path></svg>'
         };
+
+        function featureIconMarkup(feature) {
+            return FEATURE_ICONS[feature.id] || FEATURE_ICONS[feature.icon] || FEATURE_ICONS.default;
+        }
 
         let currentMode = 'simple';
         let currentUser = null;
@@ -2348,7 +2375,9 @@
 
             for (const [perm, selector] of Object.entries(permMap)) {
                 if (!hasPerm(perm)) {
-                    document.querySelectorAll(selector).forEach(el => el.classList.add('perm-hidden'));
+                    document.querySelectorAll(selector).forEach(el => {
+                        el.classList.add('perm-hidden');
+                    });
                 }
             }
 
@@ -2359,7 +2388,9 @@
 
             // Disable feature toggles if no manage_features
             if (!hasPerm('manage_features')) {
-                document.querySelectorAll('.feature-card .toggle-switch').forEach(el => el.classList.add('perm-disabled'));
+                document.querySelectorAll('.feature-card .toggle-switch').forEach(el => {
+                    el.classList.add('perm-disabled');
+                });
             }
         }
 
@@ -2367,7 +2398,9 @@
         function reapplyFeaturePermissions() {
             if (!currentUser) return;
             if (!hasPerm('manage_features')) {
-                document.querySelectorAll('.feature-card .toggle-switch').forEach(el => el.classList.add('perm-disabled'));
+                document.querySelectorAll('.feature-card .toggle-switch').forEach(el => {
+                    el.classList.add('perm-disabled');
+                });
             }
         }
 
@@ -2806,7 +2839,7 @@
                 const grid = document.getElementById('featuresGrid');
                 grid.innerHTML = features.filter(f => f.id !== 'root_servers').map(f => `
                     <div class="feature-card ${f.enabled ? 'active' : ''}" id="feature-${f.id}">
-                        <div class="feature-icon ${f.icon}">${FEATURE_ICONS[f.icon] || '?'}</div>
+                        <div class="feature-icon" data-feature="${f.id}">${featureIconMarkup(f)}</div>
                         <div class="feature-info">
                             <h3>${escapeHtml(f.name)}</h3>
                             <p>${escapeHtml(f.description)}</p>
@@ -3173,7 +3206,9 @@
             btn.textContent = 'Refreshing...';
 
             // Clear previous status indicators
-            document.querySelectorAll('.source-status').forEach(el => el.remove());
+            document.querySelectorAll('.source-status').forEach(el => {
+                el.remove();
+            });
 
             const evtSource = new EventSource('/api/blocklist-sources/refresh');
 
@@ -3276,7 +3311,9 @@
 
         function switchTlsTab(tab) {
             currentTlsTab = tab;
-            document.querySelectorAll('.tls-tab').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.tls-tab').forEach(t => {
+                t.classList.remove('active');
+            });
             event.target.classList.add('active');
             document.getElementById('tls-pem-fields').style.display = tab === 'pem' ? '' : 'none';
             document.getElementById('tls-p12-fields').style.display = tab === 'p12' ? '' : 'none';
@@ -4043,7 +4080,9 @@
                 const res = await fetch('/api/blocking/mode');
                 const data = await res.json();
                 const radios = document.querySelectorAll('input[name="blockingMode"]');
-                radios.forEach(r => r.checked = r.value === data.mode);
+                radios.forEach(r => {
+                    r.checked = r.value === data.mode;
+                });
                 const customInputs = document.getElementById('customIpInputs');
                 if (data.mode === 'custom_ip') {
                     customInputs.style.display = 'block';
