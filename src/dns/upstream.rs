@@ -1082,14 +1082,12 @@ impl UpstreamForwarder {
                         .iter()
                         .any(|r| r.record_type() == target_type);
                     if !has_target_type
-                        && (target_type == RecordType::A
-                            || target_type == RecordType::AAAA)
+                        && (target_type == RecordType::A || target_type == RecordType::AAAA)
                     {
-                        let cname_target =
-                            resp.answers().iter().find_map(|r| match r.data() {
-                                RData::CNAME(cname) => Some(cname.0.clone()),
-                                _ => None,
-                            });
+                        let cname_target = resp.answers().iter().find_map(|r| match r.data() {
+                            RData::CNAME(cname) => Some(cname.0.clone()),
+                            _ => None,
+                        });
                         if let Some(cname_target) = cname_target {
                             debug!(
                                 "Iterative: following CNAME {} -> {}",
@@ -1103,7 +1101,7 @@ impl UpstreamForwarder {
                                 false,
                             )?;
                             if let Ok((resolved_bytes, resolved_label)) =
-                                self.forward_iterative(&cname_query).await
+                                Box::pin(self.forward_iterative(&cname_query)).await
                             {
                                 if let Ok(resolved_msg) = Message::from_bytes(&resolved_bytes) {
                                     // Build a combined response: CNAME + resolved address records

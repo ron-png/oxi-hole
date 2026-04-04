@@ -94,8 +94,8 @@
   "hotPaths": [
     {
       "path": "src/dns/upstream.rs",
-      "accessCount": 46,
-      "lastAccessed": 1775338496826,
+      "accessCount": 49,
+      "lastAccessed": 1775338694798,
       "type": "file"
     },
     {
