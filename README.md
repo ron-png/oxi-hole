@@ -240,9 +240,6 @@ Bug reports, feature requests, and pull requests are welcome. Open an issue on G
 Please note that this list is not a promise, rather thoughts I might change my mind on in the future. Feel free to share your opinion and suggestions for the future of this project.
 
 ### Goals for Version 1:
-- verify that every feature on the WebUI works as expected
-- Verify that the logs are deleted properly (feature)
-- Verify client IP anonymization (feature)
 - Make the UI more user friendly (feature)
 - Verify DNS over TLS, HTTPS and QUIC work (feature)
 - Verify that changing Settings in the UI (Like Port or listen address) works with the generated terminal commands.
