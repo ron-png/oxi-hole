@@ -94,8 +94,8 @@
   "hotPaths": [
     {
       "path": "src",
-      "accessCount": 25,
-      "lastAccessed": 1775328608998,
+      "accessCount": 26,
+      "lastAccessed": 1775336433505,
       "type": "directory"
     },
     {
@@ -105,15 +105,69 @@
       "type": "file"
     },
     {
+      "path": "src/main.rs",
+      "accessCount": 4,
+      "lastAccessed": 1775336460059,
+      "type": "file"
+    },
+    {
+      "path": "",
+      "accessCount": 3,
+      "lastAccessed": 1775336432957,
+      "type": "directory"
+    },
+    {
       "path": "src/web/mod.rs",
-      "accessCount": 2,
-      "lastAccessed": 1775328564735,
+      "accessCount": 3,
+      "lastAccessed": 1775336435349,
+      "type": "file"
+    },
+    {
+      "path": "src/query_log.rs",
+      "accessCount": 3,
+      "lastAccessed": 1775336438121,
+      "type": "file"
+    },
+    {
+      "path": "src/config.rs",
+      "accessCount": 3,
+      "lastAccessed": 1775336438631,
       "type": "file"
     },
     {
       "path": "src/dns/listener_doq.rs",
+      "accessCount": 3,
+      "lastAccessed": 1775336441583,
+      "type": "file"
+    },
+    {
+      "path": "README.md",
       "accessCount": 2,
-      "lastAccessed": 1775328589476,
+      "lastAccessed": 1775336430031,
+      "type": "file"
+    },
+    {
+      "path": "src/reconfigure.rs",
+      "accessCount": 2,
+      "lastAccessed": 1775336436166,
+      "type": "file"
+    },
+    {
+      "path": "src/dns/listener_dot.rs",
+      "accessCount": 2,
+      "lastAccessed": 1775336438827,
+      "type": "file"
+    },
+    {
+      "path": "src/dns/listener_doh.rs",
+      "accessCount": 2,
+      "lastAccessed": 1775336439011,
+      "type": "file"
+    },
+    {
+      "path": "src/dns/mod.rs",
+      "accessCount": 2,
+      "lastAccessed": 1775336461755,
       "type": "file"
     },
     {
@@ -153,21 +207,9 @@
       "type": "file"
     },
     {
-      "path": "src/dns/mod.rs",
-      "accessCount": 1,
-      "lastAccessed": 1775328553156,
-      "type": "file"
-    },
-    {
       "path": "src/dns/handler.rs",
       "accessCount": 1,
       "lastAccessed": 1775328553513,
-      "type": "file"
-    },
-    {
-      "path": "src/config.rs",
-      "accessCount": 1,
-      "lastAccessed": 1775328553591,
       "type": "file"
     },
     {
@@ -180,12 +222,6 @@
       "path": "src/blocklist.rs",
       "accessCount": 1,
       "lastAccessed": 1775328556678,
-      "type": "file"
-    },
-    {
-      "path": "src/main.rs",
-      "accessCount": 1,
-      "lastAccessed": 1775328556800,
       "type": "file"
     },
     {
@@ -207,39 +243,15 @@
       "type": "file"
     },
     {
-      "path": "src/query_log.rs",
-      "accessCount": 1,
-      "lastAccessed": 1775328559954,
-      "type": "file"
-    },
-    {
       "path": "src/persistent_stats.rs",
       "accessCount": 1,
       "lastAccessed": 1775328560832,
       "type": "file"
     },
     {
-      "path": "src/dns/listener_dot.rs",
-      "accessCount": 1,
-      "lastAccessed": 1775328560889,
-      "type": "file"
-    },
-    {
       "path": "src/stats.rs",
       "accessCount": 1,
       "lastAccessed": 1775328561062,
-      "type": "file"
-    },
-    {
-      "path": "src/dns/listener_doh.rs",
-      "accessCount": 1,
-      "lastAccessed": 1775328561250,
-      "type": "file"
-    },
-    {
-      "path": "src/reconfigure.rs",
-      "accessCount": 1,
-      "lastAccessed": 1775328561799,
       "type": "file"
     },
     {
