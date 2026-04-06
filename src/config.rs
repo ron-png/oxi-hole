@@ -313,6 +313,13 @@ impl Default for BlockingConfig {
 
 impl Config {
     pub fn load(path: &Path) -> anyhow::Result<Self> {
+        // Prevent path traversal attacks by rejecting paths containing '..'.
+        if path
+            .components()
+            .any(|c| c == std::path::Component::ParentDir)
+        {
+            anyhow::bail!("Invalid input: {}", path.display());
+        }
         if path.exists() {
             let content = std::fs::read_to_string(path)?;
             let config: Config = toml::from_str(&content)?;
@@ -327,6 +334,13 @@ impl Config {
     }
 
     pub fn save(&self, path: &Path) -> anyhow::Result<()> {
+        // Prevent path traversal attacks by rejecting paths containing '..'.
+        if path
+            .components()
+            .any(|c| c == std::path::Component::ParentDir)
+        {
+            anyhow::bail!("Invalid input: {}", path.display());
+        }
         let content = toml::to_string_pretty(self)?;
         std::fs::write(path, content)?;
         Ok(())

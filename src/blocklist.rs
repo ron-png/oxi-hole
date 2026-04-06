@@ -207,7 +207,12 @@ impl BlocklistManager {
                 .await?;
             resp.text().await?
         } else {
-            tokio::fs::read_to_string(source).await?
+            // Prevent path traversal attacks by rejecting paths containing '..'.
+            let path = std::path::Path::new(source);
+            if path.components().any(|c| c == std::path::Component::ParentDir) {
+                anyhow::bail!("Invalid input: {}", path.display());
+            }
+            tokio::fs::read_to_string(path).await?
         };
 
         let parsed = parse_blocklist(&content);

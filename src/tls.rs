@@ -93,6 +93,22 @@ fn load_or_generate_certs(
                 "Loading TLS cert from {} and key from {}",
                 cert_path, key_path
             );
+            // Prevent path traversal attacks by rejecting paths containing '..'.
+            let cert_path = std::path::Path::new(cert_path);
+            if cert_path
+                .components()
+                .any(|c| c == std::path::Component::ParentDir)
+            {
+                return Err(anyhow::anyhow!("Invalid input: {}", cert_path.display()));
+            }
+            // Prevent path traversal attacks by rejecting paths containing '..'.
+            let key_path = std::path::Path::new(key_path);
+            if key_path
+                .components()
+                .any(|c| c == std::path::Component::ParentDir)
+            {
+                return Err(anyhow::anyhow!("Invalid input: {}", key_path.display()));
+            }
             let cert_file = std::fs::File::open(cert_path)?;
             let key_file = std::fs::File::open(key_path)?;
 
