@@ -350,6 +350,240 @@ async fn resolve_via_root_servers(host: &str, port: u16) -> anyhow::Result<Vec<S
     anyhow::bail!("Root fallback: max referral depth exceeded for {}", host)
 }
 
+/// Outcome of a single-name iterative walk.
+enum WalkOutcome {
+    Answers(Vec<hickory_proto::rr::Record>),
+    NxDomain,
+    NoData,
+}
+
+/// Fully iterative DNS resolution starting from root servers.
+///
+/// Self-contained — no hickory-recursor, no upstream leakage. Used as the
+/// fallback when hickory-recursor hits one of its known holes and the
+/// `use_root_servers` toggle is on, so we never leak queries to the
+/// configured upstreams (which would defeat the entire point of iterative
+/// mode).
+///
+/// Supports: arbitrary RR types, CNAME chasing, NXDOMAIN / NOERROR-empty,
+/// glueless NS referrals (resolved via `resolve_via_root_servers`).
+///
+/// Not supported: DNSSEC validation, DNAME, EDNS0 negotiation — this is a
+/// best-effort fallback, not a full resolver.
+async fn iterative_resolve_from_roots(
+    original_packet: &[u8],
+    timeout: Duration,
+) -> anyhow::Result<Vec<u8>> {
+    use hickory_proto::op::{Message, MessageType, Query, ResponseCode};
+    use hickory_proto::rr::RecordType;
+    use hickory_proto::serialize::binary::BinDecodable;
+
+    let original = Message::from_bytes(original_packet)?;
+    let question = original
+        .queries()
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("No question in DNS query"))?;
+    let qname = question.name().clone();
+    let qtype = question.query_type();
+    let qclass = question.query_class();
+    let original_id = original.header().id();
+
+    let outcome = iterative_walk(qname.clone(), qtype, timeout).await?;
+
+    let mut response = Message::new();
+    response.set_id(original_id);
+    response.set_message_type(MessageType::Response);
+    response.set_op_code(original.op_code());
+    response.set_recursion_desired(original.recursion_desired());
+    response.set_recursion_available(true);
+    let mut echo = Query::new();
+    echo.set_name(qname);
+    echo.set_query_type(qtype);
+    echo.set_query_class(qclass);
+    response.add_query(echo);
+
+    match outcome {
+        WalkOutcome::Answers(records) => {
+            response.set_response_code(ResponseCode::NoError);
+            for r in records {
+                response.add_answer(r);
+            }
+        }
+        WalkOutcome::NxDomain => {
+            response.set_response_code(ResponseCode::NXDomain);
+        }
+        WalkOutcome::NoData => {
+            // NOERROR with no answers.
+            response.set_response_code(ResponseCode::NoError);
+        }
+    }
+    // Suppress unused-var warning on qtype/RecordType import if not used.
+    let _ = RecordType::A;
+
+    Ok(response.to_vec()?)
+}
+
+/// Walk the DNS hierarchy from root servers to resolve a single (qname, qtype)
+/// pair. CNAME chasing is handled by restarting from the roots with the target.
+async fn iterative_walk(
+    mut qname: hickory_proto::rr::Name,
+    qtype: hickory_proto::rr::RecordType,
+    timeout: Duration,
+) -> anyhow::Result<WalkOutcome> {
+    use hickory_proto::op::ResponseCode;
+    use hickory_proto::rr::{RData, Record, RecordType};
+
+    const MAX_CNAME: usize = 8;
+
+    let mut accumulated: Vec<Record> = Vec::new();
+    let mut cname_hops = 0usize;
+
+    'restart: loop {
+        let mut current_servers: Vec<SocketAddr> = ROOT_SERVERS
+            .iter()
+            .map(|ip| SocketAddr::new(IpAddr::V4(*ip), 53))
+            .chain(
+                ROOT_SERVERS_V6
+                    .iter()
+                    .map(|ip| SocketAddr::new(IpAddr::V6(*ip), 53)),
+            )
+            .collect();
+
+        for _depth in 0..MAX_REFERRAL_DEPTH {
+            let query_packet = build_query(rand::random::<u16>(), &qname, qtype, false)?;
+
+            let mut resp = None;
+            for server in &current_servers {
+                match udp_query(&query_packet, *server, timeout).await {
+                    Ok(msg) => {
+                        resp = Some(msg);
+                        break;
+                    }
+                    Err(e) => {
+                        warn!("Self-coded walker: {} failed: {}", server, e);
+                    }
+                }
+            }
+            let resp = resp.ok_or_else(|| {
+                anyhow::anyhow!("Self-coded walker: all servers failed for {}", qname)
+            })?;
+
+            match resp.response_code() {
+                ResponseCode::NoError => {}
+                ResponseCode::NXDomain => {
+                    return Ok(if accumulated.is_empty() {
+                        WalkOutcome::NxDomain
+                    } else {
+                        WalkOutcome::Answers(accumulated)
+                    });
+                }
+                other => anyhow::bail!("Self-coded walker: response code {:?} for {}", other, qname),
+            }
+
+            // Direct answers matching the requested type — done.
+            let direct: Vec<Record> = resp
+                .answers()
+                .iter()
+                .filter(|r| r.record_type() == qtype)
+                .cloned()
+                .collect();
+            if !direct.is_empty() {
+                accumulated.extend(direct);
+                return Ok(WalkOutcome::Answers(accumulated));
+            }
+
+            // CNAME in the answer section — follow it unless we're explicitly
+            // asking for CNAME records.
+            if qtype != RecordType::CNAME {
+                let cname_records: Vec<Record> = resp
+                    .answers()
+                    .iter()
+                    .filter(|r| r.record_type() == RecordType::CNAME)
+                    .cloned()
+                    .collect();
+                if let Some(target) = cname_records.iter().find_map(|r| match r.data() {
+                    RData::CNAME(c) => Some(c.0.clone()),
+                    _ => None,
+                }) {
+                    accumulated.extend(cname_records);
+                    cname_hops += 1;
+                    if cname_hops > MAX_CNAME {
+                        anyhow::bail!("Self-coded walker: CNAME chain too long");
+                    }
+                    qname = target;
+                    continue 'restart;
+                }
+            }
+
+            // No answers — look for a referral in the authority section.
+            let ns_names: Vec<String> = resp
+                .name_servers()
+                .iter()
+                .filter_map(|r| match r.data() {
+                    RData::NS(ns) => Some(ns.0.to_ascii()),
+                    _ => None,
+                })
+                .collect();
+
+            if ns_names.is_empty() {
+                // NOERROR, no answers, no referral → NoData.
+                return Ok(if accumulated.is_empty() {
+                    WalkOutcome::NoData
+                } else {
+                    WalkOutcome::Answers(accumulated)
+                });
+            }
+
+            // Extract glue records for the referred NSes.
+            let mut next_servers: Vec<SocketAddr> = Vec::new();
+            for record in resp.additionals() {
+                let rec_name = record.name().to_ascii();
+                if ns_names
+                    .iter()
+                    .any(|n| n.eq_ignore_ascii_case(&rec_name))
+                {
+                    match record.data() {
+                        RData::A(ip) => {
+                            next_servers.push(SocketAddr::new(IpAddr::V4(ip.0), 53));
+                        }
+                        RData::AAAA(ip) => {
+                            next_servers.push(SocketAddr::new(IpAddr::V6(ip.0), 53));
+                        }
+                        _ => {}
+                    }
+                }
+            }
+
+            // Glueless referral: resolve NS hostnames via the bootstrap walker.
+            if next_servers.is_empty() {
+                for ns_name in &ns_names {
+                    let stripped = ns_name.trim_end_matches('.');
+                    if let Ok(addrs) = resolve_via_root_servers(stripped, 53).await {
+                        next_servers.extend(addrs);
+                        if !next_servers.is_empty() {
+                            break;
+                        }
+                    }
+                }
+            }
+
+            if next_servers.is_empty() {
+                anyhow::bail!(
+                    "Self-coded walker: no usable NS for {} referral",
+                    qname
+                );
+            }
+
+            current_servers = next_servers;
+        }
+
+        anyhow::bail!(
+            "Self-coded walker: max referral depth exceeded for {}",
+            qname
+        );
+    }
+}
+
 /// A cached DNS response with expiration.
 struct CacheEntry {
     response_bytes: Vec<u8>,
@@ -1003,64 +1237,28 @@ impl UpstreamForwarder {
                 }
                 // Hard failure (out-of-bailiwick chase, malformed EDNS from auth,
                 // timeout deep in the walk, etc.) — hickory-recursor 0.25 has
-                // known holes here. Fall back to forwarders so the user still
-                // gets an answer.
+                // known holes here. Fall back to our self-coded root-server
+                // walker so we still never leak queries to upstreams in
+                // iterative mode.
                 warn!(
-                    "Iterative resolution for {} failed ({}); falling back to upstreams",
+                    "Iterative resolution for {} failed ({}); falling back to self-coded root walker",
                     qname, e
                 );
-                return self.forward_via_upstreams(packet).await;
+                let bytes = iterative_resolve_from_roots(packet, self.timeout).await?;
+                return Ok((bytes, format!("root-walker({})", qname)));
             }
             Err(_) => {
                 warn!(
-                    "Iterative resolution for {} timed out; falling back to upstreams",
+                    "Iterative resolution for {} timed out; falling back to self-coded root walker",
                     qname
                 );
-                return self.forward_via_upstreams(packet).await;
+                let bytes = iterative_resolve_from_roots(packet, self.timeout).await?;
+                return Ok((bytes, format!("root-walker({})", qname)));
             }
         }
 
         let bytes = response.to_vec()?;
         Ok((bytes, label))
-    }
-
-    /// Forward a query through the configured upstream servers, racing them
-    /// when more than one is configured. Used both as the default path and
-    /// as a fallback when iterative resolution hits a recursor bug.
-    async fn forward_via_upstreams(&self, packet: &[u8]) -> anyhow::Result<(Vec<u8>, String)> {
-        let upstreams = self.upstreams.read().unwrap().clone();
-        if upstreams.is_empty() {
-            anyhow::bail!("No upstreams configured for fallback");
-        }
-        if upstreams.len() == 1 {
-            let upstream = &upstreams[0];
-            let response = self.forward_single(packet, upstream).await?;
-            return Ok((response, upstream.label()));
-        }
-        let (tx, mut rx) = tokio::sync::mpsc::channel(upstreams.len());
-        for upstream in &upstreams {
-            let tx = tx.clone();
-            let forwarder = self.clone();
-            let packet = packet.to_vec();
-            let label = upstream.label();
-            let upstream = upstream.clone();
-            tokio::spawn(async move {
-                let result = forwarder.forward_single(&packet, &upstream).await;
-                let _ = tx.send((result, label)).await;
-            });
-        }
-        drop(tx);
-        let mut last_err = None;
-        while let Some((result, label)) = rx.recv().await {
-            match result {
-                Ok(response) => return Ok((response, label)),
-                Err(e) => {
-                    warn!("Upstream {} failed: {}", label, e);
-                    last_err = Some(e);
-                }
-            }
-        }
-        Err(last_err.unwrap_or_else(|| anyhow::anyhow!("All upstream DNS servers failed")))
     }
 
     // ==================== Transport methods ====================

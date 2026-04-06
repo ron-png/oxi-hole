@@ -247,6 +247,9 @@ Please note that this list is not a promise, rather thoughts I might change my m
   - DNSsec
   - DNScrypt
   - Rate limits for clients
+  - no DNAME, no EDNS0, sequential server tries within a single referral
+   step, and glueless-NS resolution reuses the bootstrap walker which itself  
+  only handles glued chains.
 - logging system errors
 
 ### Goals for Version 3:
