@@ -371,25 +371,50 @@ enum WalkOutcome {
     NoData,
 }
 
-/// Fully iterative DNS resolution starting from root servers.
+/// Look up the deepest cached NS referral that is an ancestor of `qname`.
+/// E.g. for `foo.bar.example.com.` this tries `foo.bar.example.com.`,
+/// `bar.example.com.`, `example.com.`, `com.` in order and returns the first
+/// non-expired hit.
+fn lookup_ns_cache(
+    ns_cache: &NsCache,
+    qname: &hickory_proto::rr::Name,
+) -> Option<(String, Vec<SocketAddr>)> {
+    let ascii = qname.to_ascii();
+    let trimmed = ascii.trim_end_matches('.');
+    if trimmed.is_empty() {
+        return None;
+    }
+    let labels: Vec<&str> = trimmed.split('.').collect();
+    for start in 0..labels.len() {
+        let key = format!("{}.", labels[start..].join(".")).to_ascii_lowercase();
+        if let Some(entry) = ns_cache.get(&key) {
+            if !entry.is_expired() {
+                return Some((key, entry.servers.clone()));
+            }
+        }
+    }
+    None
+}
+
+/// Fully iterative DNS resolution starting from root servers (or from a
+/// cached intermediate delegation when available).
 ///
-/// Self-contained — no hickory-recursor, no upstream leakage. Used as the
-/// fallback when hickory-recursor hits one of its known holes and the
-/// `use_root_servers` toggle is on, so we never leak queries to the
-/// configured upstreams (which would defeat the entire point of iterative
-/// mode).
+/// Self-contained — no hickory-recursor, no upstream leakage. This is the
+/// only iterative path when `use_root_servers` is enabled, so we never leak
+/// queries to the configured upstreams.
 ///
 /// Supports: arbitrary RR types, CNAME chasing, NXDOMAIN / NOERROR-empty,
-/// glueless NS referrals (resolved via `resolve_via_root_servers`).
+/// glueless NS referrals (resolved via `resolve_via_root_servers`), and a
+/// per-zone NS+glue referral cache.
 ///
-/// Not supported: DNSSEC validation, DNAME, EDNS0 negotiation — this is a
-/// best-effort fallback, not a full resolver.
+/// Not supported: DNSSEC validation, DNAME, EDNS0 negotiation. DNSSEC is
+/// planned as a follow-up.
 async fn iterative_resolve_from_roots(
     original_packet: &[u8],
     timeout: Duration,
+    ns_cache: &NsCache,
 ) -> anyhow::Result<Vec<u8>> {
     use hickory_proto::op::{Message, MessageType, Query, ResponseCode};
-    use hickory_proto::rr::RecordType;
     use hickory_proto::serialize::binary::BinDecodable;
 
     let original = Message::from_bytes(original_packet)?;
@@ -402,7 +427,7 @@ async fn iterative_resolve_from_roots(
     let qclass = question.query_class();
     let original_id = original.header().id();
 
-    let outcome = iterative_walk(qname.clone(), qtype, timeout).await?;
+    let outcome = iterative_walk(qname.clone(), qtype, timeout, ns_cache).await?;
 
     let mut response = Message::new();
     response.set_id(original_id);
@@ -431,18 +456,19 @@ async fn iterative_resolve_from_roots(
             response.set_response_code(ResponseCode::NoError);
         }
     }
-    // Suppress unused-var warning on qtype/RecordType import if not used.
-    let _ = RecordType::A;
 
     Ok(response.to_vec()?)
 }
 
-/// Walk the DNS hierarchy from root servers to resolve a single (qname, qtype)
-/// pair. CNAME chasing is handled by restarting from the roots with the target.
+/// Walk the DNS hierarchy to resolve a single (qname, qtype) pair, starting
+/// from the deepest cached delegation point if one is known, otherwise from
+/// the root servers. CNAME chasing is handled by restarting the walk with
+/// the target name (which may itself benefit from a cached delegation).
 async fn iterative_walk(
     mut qname: hickory_proto::rr::Name,
     qtype: hickory_proto::rr::RecordType,
     timeout: Duration,
+    ns_cache: &NsCache,
 ) -> anyhow::Result<WalkOutcome> {
     use hickory_proto::op::ResponseCode;
     use hickory_proto::rr::{RData, Record, RecordType};
@@ -453,15 +479,21 @@ async fn iterative_walk(
     let mut cname_hops = 0usize;
 
     'restart: loop {
-        let mut current_servers: Vec<SocketAddr> = ROOT_SERVERS
-            .iter()
-            .map(|ip| SocketAddr::new(IpAddr::V4(*ip), 53))
-            .chain(
-                ROOT_SERVERS_V6
+        let (mut current_servers, _seed_zone) = match lookup_ns_cache(ns_cache, &qname) {
+            Some((zone, servers)) => (servers, Some(zone)),
+            None => (
+                ROOT_SERVERS
                     .iter()
-                    .map(|ip| SocketAddr::new(IpAddr::V6(*ip), 53)),
-            )
-            .collect();
+                    .map(|ip| SocketAddr::new(IpAddr::V4(*ip), 53))
+                    .chain(
+                        ROOT_SERVERS_V6
+                            .iter()
+                            .map(|ip| SocketAddr::new(IpAddr::V6(*ip), 53)),
+                    )
+                    .collect::<Vec<_>>(),
+                None,
+            ),
+        };
 
         for _depth in 0..MAX_REFERRAL_DEPTH {
             let query_packet = build_query(rand::random::<u16>(), &qname, qtype, false)?;
@@ -582,6 +614,41 @@ async fn iterative_walk(
 
             if next_servers.is_empty() {
                 anyhow::bail!("Self-coded walker: no usable NS for {} referral", qname);
+            }
+
+            // Populate the per-zone NS cache so the next query under this
+            // zone can skip straight here instead of walking from the roots.
+            // Key = the owner name of the NS RRset (the delegated zone),
+            // TTL = the minimum NS RRset TTL clamped to sane bounds.
+            if let Some((zone_key, ttl)) = resp
+                .name_servers()
+                .iter()
+                .filter(|r| matches!(r.data(), RData::NS(_)))
+                .fold(None::<(String, u32)>, |acc, r| {
+                    let key = r.name().to_ascii().to_ascii_lowercase();
+                    let key = if key.ends_with('.') {
+                        key
+                    } else {
+                        format!("{}.", key)
+                    };
+                    let ttl = r.ttl();
+                    Some(match acc {
+                        Some((k, t)) if k == key => (k, t.min(ttl)),
+                        Some(prev) => prev,
+                        None => (key, ttl),
+                    })
+                })
+            {
+                if zone_key != "." {
+                    let ttl = ttl.clamp(CACHE_TTL_FLOOR, CACHE_TTL_CEILING);
+                    ns_cache.insert(
+                        zone_key,
+                        NsCacheEntry {
+                            servers: next_servers.clone(),
+                            expires_at: Instant::now() + Duration::from_secs(ttl as u64),
+                        },
+                    );
+                }
             }
 
             current_servers = next_servers;
@@ -730,6 +797,26 @@ struct DoqPoolEntry {
     connection: quinn::Connection,
 }
 
+/// Cached NS+glue referral for a zone, used by the iterative walker to skip
+/// the root → TLD → ... part of the walk on subsequent queries under the
+/// same delegation point.
+#[derive(Clone)]
+struct NsCacheEntry {
+    servers: Vec<SocketAddr>,
+    expires_at: Instant,
+}
+
+impl NsCacheEntry {
+    fn is_expired(&self) -> bool {
+        Instant::now() >= self.expires_at
+    }
+}
+
+/// Per-zone NS cache. Key = lowercase FQDN with trailing dot (e.g.
+/// `"dnsleaktest.com."`), value = the addresses of the authoritative servers
+/// for that zone, plus an expiry derived from the NS RRset TTL.
+type NsCache = DashMap<String, NsCacheEntry>;
+
 /// Handles forwarding DNS queries to upstream servers with multi-protocol support.
 #[derive(Clone)]
 pub struct UpstreamForwarder {
@@ -745,11 +832,8 @@ pub struct UpstreamForwarder {
     /// DoQ connection pool keyed by (addr, hostname) per RFC 9250 §5.5.1.
     #[allow(clippy::type_complexity)]
     doq_pool: Arc<DashMap<(SocketAddr, String), Arc<Mutex<DoqPoolEntry>>>>,
-    /// Lazily-initialized recursive resolver for root-server mode.
-    /// Wrapped in a Mutex<Option<...>> so it can be reset (e.g. when caching
-    /// is toggled or the user-facing cache is flushed) without leaking stale
-    /// internal recursor state.
-    recursor: Arc<Mutex<Option<Arc<hickory_recursor::Recursor>>>>,
+    /// Per-zone NS+glue cache used by the in-tree iterative walker.
+    ns_cache: Arc<NsCache>,
 }
 
 impl UpstreamForwarder {
@@ -785,55 +869,8 @@ impl UpstreamForwarder {
             cache_misses: Arc::new(AtomicU64::new(0)),
             cache_enabled: Arc::new(AtomicBool::new(true)),
             doq_pool: Arc::new(DashMap::new()),
-            recursor: Arc::new(Mutex::new(None)),
+            ns_cache: Arc::new(DashMap::new()),
         })
-    }
-
-    /// Lazily build the recursive resolver used when root-server mode is enabled.
-    async fn recursor(&self) -> anyhow::Result<Arc<hickory_recursor::Recursor>> {
-        use hickory_resolver::config::NameServerConfigGroup;
-
-        let mut guard = self.recursor.lock().await;
-        if let Some(r) = guard.as_ref() {
-            return Ok(r.clone());
-        }
-
-        let ips: Vec<IpAddr> = ROOT_SERVERS
-            .iter()
-            .map(|ip| IpAddr::V4(*ip))
-            .chain(ROOT_SERVERS_V6.iter().map(|ip| IpAddr::V6(*ip)))
-            .collect();
-        let roots = NameServerConfigGroup::from_ips_clear(&ips, 53, true);
-
-        let cache_size = if self.cache_enabled.load(Ordering::Relaxed) {
-            1024
-        } else {
-            1
-        };
-        // TODO(v2): enable DNSSEC validation. Today we run security-unaware to
-        // match the previous custom resolver's behavior.
-        let recursor = hickory_recursor::Recursor::builder()
-            .ns_cache_size(cache_size)
-            .record_cache_size(cache_size)
-            .build(roots)
-            .map_err(|e| anyhow::anyhow!("failed to build recursor: {}", e))?;
-        let arc = Arc::new(recursor);
-        *guard = Some(arc.clone());
-        Ok(arc)
-    }
-
-    /// Reset the lazily-built recursor so the next call rebuilds it with
-    /// fresh internal state and the current cache settings.
-    fn reset_recursor(&self) {
-        if let Ok(mut guard) = self.recursor.try_lock() {
-            *guard = None;
-        } else {
-            // If somebody is mid-build, just spawn a best-effort async clear.
-            let r = self.recursor.clone();
-            tokio::spawn(async move {
-                *r.lock().await = None;
-            });
-        }
     }
 
     pub fn set_use_root_servers(&self, enabled: bool) {
@@ -855,21 +892,19 @@ impl UpstreamForwarder {
     /// Flush the cache, reset counters, and close pooled DoQ connections.
     pub fn cache_flush(&self) {
         self.cache.clear();
+        self.ns_cache.clear();
         self.cache_hits.store(0, Ordering::Relaxed);
         self.cache_misses.store(0, Ordering::Relaxed);
         self.doq_pool.clear();
-        // Drop the recursor too — its internal NS/record cache would otherwise
-        // outlive a user-initiated flush.
-        self.reset_recursor();
     }
 
     /// Set whether caching is enabled.
     pub fn set_cache_enabled(&self, enabled: bool) {
         let prev = self.cache_enabled.swap(enabled, Ordering::Relaxed);
-        if prev != enabled {
-            // Recursor's internal cache size is fixed at build time; rebuild
-            // it so it picks up the new setting.
-            self.reset_recursor();
+        if prev != enabled && !enabled {
+            // Disabling caching: drop the per-zone NS cache too so we don't
+            // serve referrals from a stale snapshot.
+            self.ns_cache.clear();
         }
     }
 
@@ -877,6 +912,7 @@ impl UpstreamForwarder {
     pub fn evict_expired(&self) -> usize {
         let before = self.cache.len();
         self.cache.retain(|_, entry| !entry.is_expired());
+        self.ns_cache.retain(|_, entry| !entry.is_expired());
 
         // Clean up closed DoQ connections
         self.doq_pool.retain(|_, entry| {
@@ -1189,86 +1225,22 @@ impl UpstreamForwarder {
 
     // ==================== Iterative resolution (root servers) ====================
 
-    /// Recursive resolution starting from root servers using `hickory-recursor`.
-    ///
-    /// The recursor walks the DNS hierarchy itself (root → TLD → authoritative) and
-    /// handles QNAME minimization, glue/NS chasing, and its own caching internally.
+    /// Iterative resolution starting from root servers using the in-tree
+    /// walker. No upstreams are contacted — queries are answered by walking
+    /// the DNS hierarchy ourselves, with a per-zone NS+glue cache to skip the
+    /// upper levels of the walk on repeat queries under the same delegation.
     async fn forward_iterative(&self, packet: &[u8]) -> anyhow::Result<(Vec<u8>, String)> {
-        use hickory_proto::op::{Message, MessageType, Query, ResponseCode};
+        use hickory_proto::op::Message;
         use hickory_proto::serialize::binary::BinDecodable;
 
-        let original = Message::from_bytes(packet)?;
-        let question = original
+        let qname = Message::from_bytes(packet)?
             .queries()
             .first()
+            .map(|q| q.name().clone())
             .ok_or_else(|| anyhow::anyhow!("No question in DNS query"))?;
-        let original_id = original.header().id();
-        let qname = question.name().clone();
-        let qtype = question.query_type();
-        let qclass = question.query_class();
-        let label = format!("iterative({})", qname);
 
-        let recursor = self.recursor().await?;
-        let lookup_query = Query::query(qname.clone(), qtype);
-
-        let mut response = Message::new();
-        response.set_id(original_id);
-        response.set_message_type(MessageType::Response);
-        response.set_op_code(original.op_code());
-        response.set_recursion_desired(original.recursion_desired());
-        response.set_recursion_available(true);
-        let mut echo = Query::new();
-        echo.set_name(qname.clone());
-        echo.set_query_type(qtype);
-        echo.set_query_class(qclass);
-        response.add_query(echo);
-
-        let resolve_fut = recursor.resolve(lookup_query, std::time::Instant::now(), false);
-        match tokio::time::timeout(self.timeout, resolve_fut).await {
-            Ok(Ok(lookup)) => {
-                response.set_response_code(ResponseCode::NoError);
-                for record in lookup.records().iter().cloned() {
-                    response.add_answer(record);
-                }
-            }
-            Ok(Err(e)) => {
-                use hickory_proto::ProtoErrorKind;
-                let proto_err = match e.kind() {
-                    hickory_recursor::ErrorKind::Proto(p) => Some(p),
-                    _ => None,
-                };
-                // Clean negative answer: map straight through, no fallback.
-                if let Some(proto_err) = proto_err {
-                    if let ProtoErrorKind::NoRecordsFound { response_code, .. } = proto_err.kind() {
-                        response.set_response_code(*response_code);
-                        let bytes = response.to_vec()?;
-                        return Ok((bytes, label));
-                    }
-                }
-                // Hard failure (out-of-bailiwick chase, malformed EDNS from auth,
-                // timeout deep in the walk, etc.) — hickory-recursor 0.25 has
-                // known holes here. Fall back to our self-coded root-server
-                // walker so we still never leak queries to upstreams in
-                // iterative mode.
-                warn!(
-                    "Iterative resolution for {} failed ({}); falling back to self-coded root walker",
-                    qname, e
-                );
-                let bytes = iterative_resolve_from_roots(packet, self.timeout).await?;
-                return Ok((bytes, format!("root-walker({})", qname)));
-            }
-            Err(_) => {
-                warn!(
-                    "Iterative resolution for {} timed out; falling back to self-coded root walker",
-                    qname
-                );
-                let bytes = iterative_resolve_from_roots(packet, self.timeout).await?;
-                return Ok((bytes, format!("root-walker({})", qname)));
-            }
-        }
-
-        let bytes = response.to_vec()?;
-        Ok((bytes, label))
+        let bytes = iterative_resolve_from_roots(packet, self.timeout, &self.ns_cache).await?;
+        Ok((bytes, format!("root-walker({})", qname)))
     }
 
     // ==================== Transport methods ====================
