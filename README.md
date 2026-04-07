@@ -19,6 +19,7 @@ Supports plain DNS (UDP), DNS-over-TLS (DoT), DNS-over-HTTPS (DoH), and DNS-over
 - **Written in Rust** — memory-safe, no garbage collector, minimal resource usage
 - **Zero-downtime updates** — automatic self-updates with health checks and seamless binary replacement
 - **Runtime configuration** — change any setting from the web dashboard without restarting
+- **Root servers** — option to use the root servers as upstream 
 
 ## Features
 
