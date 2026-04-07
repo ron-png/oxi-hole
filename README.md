@@ -239,6 +239,7 @@ Please note that this list is not a promise, rather thoughts I might change my m
 ### Goals for Version 1:
 - Make the UI more user friendly (feature)
 - The horizontal scroll bar at the logs tab is a bit funky (visual Bug)
+- The root servers toggle has the description with "Maximum Privacy". This needs elaboration. 
 - Verify DNS over TLS, HTTPS and QUIC work (feature)
 - Verify that changing Settings in the UI (Like Port or listen address) works with the generated terminal commands.
 - let the user define the https request path
