@@ -274,6 +274,7 @@ Please note that this list is not a promise, rather thoughts I might change my m
   only handles glued chains.
 - logging system errors
 - DHCP Server
+- redundancy feature. Dns server cluster
 
 ### Goals for Version 3:
 - More statistics, fancy graphs and more
