@@ -741,9 +741,9 @@
             scrollbar-width: thin;
             border-top: 1px solid var(--border-light);
             border-bottom: 1px solid var(--border-light);
-            background: linear-gradient(to bottom,
-                    rgba(0, 0, 0, 0.25),
-                    transparent);
+            /* opaque so rows scrolling beneath the sticky head never bleed
+               through this strip */
+            background: var(--bg-subtle);
         }
 
         .logs-h-scroll::-webkit-scrollbar {
@@ -775,6 +775,12 @@
         .logs-header-clip {
             overflow: hidden;
             border-bottom: 1px solid var(--border);
+            /* explicit opaque background so scrolling body rows are hidden
+               by the sticky head regardless of child stacking contexts
+               introduced by the translated header table */
+            background: var(--bg-subtle);
+            position: relative;
+            z-index: 1;
         }
 
         .logs-header-table {
@@ -4627,11 +4633,20 @@
 
         function updateLogsSpacerWidth() {
             const wrap = document.getElementById('logs-table-wrap');
+            const proxy = document.getElementById('logsHScroll');
             const spacer = document.getElementById('logsHScrollSpacer');
-            if (!wrap || !spacer) return;
-            // scrollWidth reflects the actual rendered width of the body
-            // table including the min-width fallback when tbody is empty.
-            const w = Math.max(wrap.scrollWidth, wrap.clientWidth);
+            if (!wrap || !proxy || !spacer) return;
+            // The proxy strip and the body wrap can have different clientWidths
+            // (e.g. the wrap's padding-box includes its horizontal padding while
+            // the proxy sits inside a padded ancestor). We want their max
+            // scrollLeft values to match so dragging the proxy thumb to the end
+            // lines the headers up exactly with the end of the body content.
+            //   wrap_max   = wrap.scrollWidth - wrap.clientWidth
+            //   proxy_max  = spacer.width     - proxy.clientWidth
+            // Solving for spacer:
+            //   spacer = wrap.scrollWidth - wrap.clientWidth + proxy.clientWidth
+            const overflow = Math.max(0, wrap.scrollWidth - wrap.clientWidth);
+            const w = Math.max(proxy.clientWidth + overflow, proxy.clientWidth);
             spacer.style.width = w + 'px';
             // Re-run sync in case scrollLeft was clamped by the resize.
             syncLogsHorizontalScroll('wrap');
