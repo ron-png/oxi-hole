@@ -17,9 +17,11 @@ Supports plain DNS (UDP), DNS-over-TLS (DoT), DNS-over-HTTPS (DoH), and DNS-over
 Get Oxi-DNS running in under a minute:
 
 
-**Install (Linux, MacOS)**
-```bash
-curl -sSL "https://raw.githubusercontent.com/ron-png/oxi-dns/main/scripts/install.sh" | sh
+**Install (Linux, macOS, FreeBSD, OpenBSD)**
+```sh
+URL="https://raw.githubusercontent.com/ron-png/oxi-dns/main/scripts/install.sh"; \
+  (curl -fsSL "$URL" 2>/dev/null || wget -qO- "$URL" 2>/dev/null || \
+   fetch -qo- "$URL" 2>/dev/null || ftp -Vo - "$URL" 2>/dev/null) | sh
 ```
 
 **Or run with Docker**
@@ -121,11 +123,21 @@ Available at `http://<host>:9853`:
 
 ### Install Script
 
+Works on Linux, macOS, FreeBSD, and OpenBSD. The script auto-detects your init system (systemd, launchd, OpenRC, rc.d) and privilege tool (`sudo`, `doas`, or `su`).
+
 ```bash
 curl -sSL "https://raw.githubusercontent.com/ron-png/oxi-dns/main/scripts/install.sh" | sh
 ```
 
-Installs the binary to `/opt/oxi-dns/`, config to `/etc/oxi-dns/config.toml`, and creates a systemd service.
+**Universal one-liner** — works everywhere (auto-picks `curl`, `wget`, `fetch`, or `ftp` depending on OS):
+
+```sh
+URL="https://raw.githubusercontent.com/ron-png/oxi-dns/main/scripts/install.sh"; \
+  (curl -fsSL "$URL" 2>/dev/null || wget -qO- "$URL" 2>/dev/null || \
+   fetch -qo- "$URL" 2>/dev/null || ftp -Vo - "$URL" 2>/dev/null) | sh
+```
+
+Installs the binary to `/opt/oxi-dns/`, config to `/etc/oxi-dns/config.toml`, and creates a service using the native init system.
 
 **Options** (pass via `sh -s -- <flags>`):
 

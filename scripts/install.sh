@@ -152,22 +152,37 @@ check_root() {
         fi
         export ALREADY_ELEVATED=1
 
-        log_info "Elevating privileges using sudo..."
-        if ! command -v sudo >/dev/null 2>&1; then
-            log_error "This script requires root privileges. Please run as root or install 'sudo'."
+        # Pick an available privilege escalation tool.
+        # FreeBSD/OpenBSD commonly ship doas instead of sudo; fall back to su.
+        ELEVATE=""
+        if command -v sudo >/dev/null 2>&1; then
+            ELEVATE="sudo"
+        elif command -v doas >/dev/null 2>&1; then
+            ELEVATE="doas"
+        elif command -v su >/dev/null 2>&1; then
+            ELEVATE="su"
+        else
+            log_error "This script requires root privileges. Please run as root or install sudo/doas."
             exit 1
         fi
 
+        log_info "Elevating privileges using ${ELEVATE}..."
+
         if [ -f "$0" ] && [ "$0" != "sh" ] && [ "$0" != "bash" ] && [ "$0" != "-sh" ] && [ "$0" != "dash" ]; then
-            exec sudo sh "$0" $ORIG_ARGS
+            SCRIPT_PATH="$0"
         else
             check_dependencies
-            TMP_SCRIPT=$(mktemp)
-            download "https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/main/scripts/install.sh?v=$(date +%s)" "$TMP_SCRIPT"
-            trap 'rm -f "$TMP_SCRIPT"' EXIT
-            sudo sh "$TMP_SCRIPT" $ORIG_ARGS
-            exit $?
+            SCRIPT_PATH=$(mktemp)
+            download "https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/main/scripts/install.sh?v=$(date +%s)" "$SCRIPT_PATH"
+            trap 'rm -f "$SCRIPT_PATH"' EXIT
         fi
+
+        case "$ELEVATE" in
+            sudo) sudo sh "$SCRIPT_PATH" $ORIG_ARGS ;;
+            doas) doas sh "$SCRIPT_PATH" $ORIG_ARGS ;;
+            su)   su root -c "sh \"$SCRIPT_PATH\" $ORIG_ARGS" ;;
+        esac
+        exit $?
     fi
 }
 
@@ -226,8 +241,11 @@ check_dependencies() {
         DOWNLOAD_CMD="wget"
     elif command -v fetch >/dev/null 2>&1; then
         DOWNLOAD_CMD="fetch"
+    elif command -v ftp >/dev/null 2>&1 && ftp -h 2>&1 | grep -q '\-o'; then
+        # OpenBSD ftp(1) supports URLs and -o for output file
+        DOWNLOAD_CMD="ftp"
     else
-        log_error "No download tool found. Install curl, wget, or fetch."
+        log_error "No download tool found. Install curl, wget, fetch, or ftp."
         exit 1
     fi
     log_verbose "Download command: $DOWNLOAD_CMD"
@@ -253,6 +271,9 @@ download() {
         fetch)
             fetch -o "$dest" "$url"
             ;;
+        ftp)
+            ftp -o "$dest" "$url"
+            ;;
     esac
 }
 
@@ -268,6 +289,9 @@ download_to_stdout() {
             ;;
         fetch)
             fetch -o - "$url"
+            ;;
+        ftp)
+            ftp -o - "$url"
             ;;
     esac
 }
@@ -1131,12 +1155,19 @@ check_root() {
         fi
         export ALREADY_ELEVATED=1
 
-        if ! command -v sudo >/dev/null 2>&1; then
-            log_error "This script requires root privileges. Please run as root or install 'sudo'."
+        if command -v sudo >/dev/null 2>&1; then
+            log_info "Elevating privileges using sudo..."
+            exec sudo sh "$0" "$@"
+        elif command -v doas >/dev/null 2>&1; then
+            log_info "Elevating privileges using doas..."
+            exec doas sh "$0" "$@"
+        elif command -v su >/dev/null 2>&1; then
+            log_info "Elevating privileges using su..."
+            exec su root -c "sh \"$0\" $*"
+        else
+            log_error "This script requires root privileges. Please run as root or install sudo/doas."
             exit 1
         fi
-        log_info "Elevating privileges using sudo..."
-        exec sudo sh "$0" "$@"
     fi
 }
 
