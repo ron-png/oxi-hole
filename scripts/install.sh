@@ -641,10 +641,19 @@ do_install() {
     chmod 755 "${INSTALL_DIR}/${BINARY_NAME}"
     log_info "Binary installed: ${INSTALL_DIR}/${BINARY_NAME}"
 
-    # Create symlink in /usr/local/bin
-    mkdir -p /usr/local/bin
-    ln -sf "${INSTALL_DIR}/${BINARY_NAME}" "/usr/local/bin/${BINARY_NAME}"
-    log_info "Symlink created: /usr/local/bin/${BINARY_NAME}"
+    # Create symlink in a directory on PATH.
+    # On macOS, /usr/local/bin may not exist by default (especially on Apple Silicon),
+    # so create it first. On other systems it typically already exists.
+    SYMLINK_DIR="/usr/local/bin"
+    if [ ! -d "$SYMLINK_DIR" ]; then
+        mkdir -p "$SYMLINK_DIR" 2>/dev/null || true
+    fi
+    if [ -d "$SYMLINK_DIR" ]; then
+        ln -sf "${INSTALL_DIR}/${BINARY_NAME}" "${SYMLINK_DIR}/${BINARY_NAME}"
+        log_info "Symlink created: ${SYMLINK_DIR}/${BINARY_NAME}"
+    else
+        log_warn "Could not create ${SYMLINK_DIR}; use ${INSTALL_DIR}/${BINARY_NAME} directly"
+    fi
 
     # Interactive setup prompts (only for fresh installs)
     if [ ! -f "${CONFIG_DIR}/config.toml" ]; then
