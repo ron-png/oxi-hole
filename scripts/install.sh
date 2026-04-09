@@ -481,6 +481,26 @@ do_install() {
     detect_os
     detect_arch
     check_dependencies
+
+    # Prebuilt BSD binaries are amd64-only. Fail fast with a clear message
+    # instead of letting the download 404.
+    case "$OS" in
+        freebsd|openbsd)
+            if [ "$ARCH" != "amd64" ]; then
+                log_error "Prebuilt ${OS} binaries are only available for amd64 (x86_64)."
+                log_error "Detected architecture: ${ARCH}"
+                log_error ""
+                log_error "On ${OS}/${ARCH} you'll need to build from source:"
+                log_error "  1. Install Rust:  pkg_add rust   # (OpenBSD)   or   pkg install rust   # (FreeBSD)"
+                log_error "  2. git clone https://github.com/${REPO_OWNER}/${REPO_NAME}.git"
+                log_error "  3. cd ${REPO_NAME} && cargo build --release"
+                log_error ""
+                log_error "See https://github.com/${REPO_OWNER}/${REPO_NAME} for details."
+                exit 1
+            fi
+            ;;
+    esac
+
     migrate_from_legacy
     get_latest_version
 

@@ -17,7 +17,7 @@ Supports plain DNS (UDP), DNS-over-TLS (DoT), DNS-over-HTTPS (DoH), and DNS-over
 Get Oxi-DNS running in under a minute:
 
 
-**Install (Linux, macOS, FreeBSD, OpenBSD)**
+**Install (Linux, macOS, FreeBSD [amd64 only], OpenBSD [amd64 only])**
 ```sh
 URL="https://raw.githubusercontent.com/ron-png/oxi-dns/main/scripts/install.sh"; \
   (curl -fsSL "$URL" 2>/dev/null || wget -qO- "$URL" 2>/dev/null || \
@@ -123,7 +123,7 @@ Available at `http://<host>:9853`:
 
 ### Install Script
 
-Works on Linux, macOS, FreeBSD, and OpenBSD. The script auto-detects your init system (systemd, launchd, OpenRC, rc.d) and privilege tool (`sudo`, `doas`, or `su`).
+Works on Linux, macOS, FreeBSD (amd64 only), and OpenBSD (amd64 only). The script auto-detects your init system (systemd, launchd, OpenRC, rc.d) and privilege tool (`sudo` or `doas`).
 
 ```bash
 curl -sSL "https://raw.githubusercontent.com/ron-png/oxi-dns/main/scripts/install.sh" | sh

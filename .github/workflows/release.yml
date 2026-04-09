@@ -120,7 +120,7 @@ jobs:
           - target: aarch64-apple-darwin
             os: macos-latest
             archive: darwin-arm64
-          # FreeBSD x86_64
+          # FreeBSD x86_64 (amd64 only — no arm64 build)
           - target: x86_64-unknown-freebsd
             os: ubuntu-latest
             archive: freebsd-amd64
@@ -164,9 +164,42 @@ jobs:
           name: ${{ env.BINARY_NAME }}-${{ matrix.archive }}
           path: ${{ env.BINARY_NAME }}-${{ matrix.archive }}.tar.gz
 
+  build-openbsd-amd64:
+    name: Build openbsd-amd64
+    needs: prepare
+    runs-on: ubuntu-latest
+    # Best-effort: OpenBSD is tier 3 in Rust. Built natively inside an OpenBSD VM.
+    continue-on-error: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.prepare.outputs.commit_sha }}
+
+      - name: Build inside OpenBSD VM
+        uses: vmactions/openbsd-vm@v1
+        with:
+          release: "7.6"
+          usesh: true
+          envs: 'BINARY_NAME OXI_DNS_VERSION'
+          prepare: |
+            pkg_add -I rust
+          run: |
+            export OXI_DNS_VERSION="${{ needs.prepare.outputs.version }}"
+            cargo build --release
+            mkdir -p dist
+            tar czf "dist/${BINARY_NAME}-openbsd-amd64.tar.gz" -C target/release "${BINARY_NAME}"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.BINARY_NAME }}-openbsd-amd64
+          path: dist/${{ env.BINARY_NAME }}-openbsd-amd64.tar.gz
+          if-no-files-found: warn
+
   release:
     name: Create Release
-    needs: [prepare, build]
+    needs: [prepare, build, build-openbsd-amd64]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
