@@ -1,2 +1,5 @@
 [build.env]
-passthrough = ["OXI_DNS_VERSION"]
+passthrough = ["OXI_DNS_VERSION", "AWS_LC_SYS_CMAKE_BUILDER"]
+
+[target.x86_64-unknown-linux-gnu]
+pre-build = ["apt-get update && apt-get install -y cmake"]
