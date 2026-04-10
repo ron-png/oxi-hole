@@ -199,7 +199,7 @@ jobs:
 
   release:
     name: Create Release
-    needs: [prepare, build, build-openbsd-amd64]
+    needs: [prepare, build]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -211,6 +211,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: artifacts
+          pattern: ${{ env.BINARY_NAME }}-*
 
       - name: Generate checksums
         run: |
@@ -231,6 +232,23 @@ jobs:
             artifacts/checksums.txt
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  attach-openbsd:
+    name: Attach OpenBSD binary to release
+    needs: [prepare, build-openbsd-amd64, release]
+    if: needs.build-openbsd-amd64.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download OpenBSD artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.BINARY_NAME }}-openbsd-amd64
+
+      - name: Upload to GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+        run: gh release upload "$TAG" "${{ env.BINARY_NAME }}-openbsd-amd64.tar.gz" --repo "${{ github.repository }}"
 
   container:
     name: Build Container Image
