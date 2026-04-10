@@ -125,12 +125,6 @@ Available at `http://<host>:9853`:
 
 Works on Linux, macOS, FreeBSD (amd64 only), and OpenBSD (amd64 only). The script auto-detects your init system (systemd, launchd, OpenRC, rc.d) and privilege tool (`sudo` or `doas`).
 
-```bash
-curl -sSL "https://raw.githubusercontent.com/ron-png/oxi-dns/main/scripts/install.sh" | sh
-```
-
-**Universal one-liner** — works everywhere (auto-picks `curl`, `wget`, `fetch`, or `ftp` depending on OS):
-
 ```sh
 URL="https://raw.githubusercontent.com/ron-png/oxi-dns/main/scripts/install.sh"; \
   (curl -fsSL "$URL" 2>/dev/null || wget -qO- "$URL" 2>/dev/null || \
