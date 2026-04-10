@@ -2095,6 +2095,14 @@ async fn api_set_log_settings(
             .anonymize_ip
             .store(anonymize, std::sync::atomic::Ordering::Relaxed);
         info!("Client IP anonymization set to {}", anonymize);
+        if anonymize {
+            let ql = state.query_log.clone();
+            tokio::spawn(async move {
+                if let Err(e) = ql.anonymize_all_ips().await {
+                    tracing::warn!("Failed to retroactively anonymize IPs: {}", e);
+                }
+            });
+        }
     }
     state.save_config().await;
     Ok(StatusCode::OK)

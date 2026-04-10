@@ -223,6 +223,46 @@ impl QueryLog {
         .map_err(Into::into)
     }
 
+    /// Retroactively anonymize all client IPs in existing log entries.
+    pub async fn anonymize_all_ips(&self) -> anyhow::Result<u64> {
+        let conn = self.conn.clone();
+        let updated = conn
+            .call(move |conn| {
+                let mut stmt =
+                    conn.prepare("SELECT id, client_ip FROM query_log WHERE client_ip != ''")?;
+                let rows: Vec<(i64, String)> = stmt
+                    .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+                    .filter_map(|r| r.ok())
+                    .collect();
+
+                let mut count = 0u64;
+                let update =
+                    conn.prepare_cached("UPDATE query_log SET client_ip = ?1 WHERE id = ?2")?;
+                // Need to drop the immutable borrow from prepare_cached before using it mutably
+                drop(update);
+                for (id, ip) in &rows {
+                    let anon = anonymize_ip(ip);
+                    if &anon != ip {
+                        conn.execute(
+                            "UPDATE query_log SET client_ip = ?1 WHERE id = ?2",
+                            params![anon, id],
+                        )?;
+                        count += 1;
+                    }
+                }
+                Ok(count)
+            })
+            .await?;
+
+        if updated > 0 {
+            info!(
+                "Retroactively anonymized {} query log entries",
+                updated
+            );
+        }
+        Ok(updated)
+    }
+
     /// Delete entries older than the given number of days.
     pub async fn purge_older_than(&self, days: u32) -> anyhow::Result<u64> {
         let cutoff = Utc::now() - chrono::Duration::days(days as i64);
