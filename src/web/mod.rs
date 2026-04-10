@@ -52,6 +52,7 @@ pub struct AppState {
     pub update_check_signal: tokio::sync::watch::Sender<bool>,
     pub persistent_stats: crate::persistent_stats::PersistentStats,
     pub stats_retention_days: std::sync::Arc<tokio::sync::RwLock<u32>>,
+    pub acme: std::sync::Arc<crate::acme::AcmeState>,
 }
 
 impl AppState {
@@ -399,6 +400,11 @@ pub async fn run_web_server(
         .route("/api/system/tls", get(api_tls_status))
         .route("/api/system/tls/upload", post(api_tls_upload))
         .route("/api/system/tls/remove", post(api_tls_remove))
+        // ACME certificate management
+        .route("/api/system/tls/acme/issue", post(api_acme_issue))
+        .route("/api/system/tls/acme/confirm", post(api_acme_confirm))
+        .route("/api/system/tls/acme/status", get(api_acme_status))
+        .route("/api/system/tls/acme/renew", post(api_acme_renew))
         // Query log
         .route("/api/logs", get(api_logs))
         .route("/api/logs/settings", get(api_get_log_settings))
@@ -2271,6 +2277,213 @@ async fn api_tls_remove(
     let _ = state.restart_signal.send(true);
 
     Json(serde_json::json!({"success": true})).into_response()
+}
+
+// ==================== ACME Certificate Management ====================
+
+async fn api_acme_issue(
+    State(state): State<AppState>,
+    axum::Extension(user): axum::Extension<AuthenticatedUser>,
+    axum::Json(body): axum::Json<serde_json::Value>,
+) -> Response {
+    if !user.permissions.contains(&Permission::ManageSystem) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+
+    let domain = match body.get("domain").and_then(|v| v.as_str()) {
+        Some(d) if !d.is_empty() => d.to_string(),
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": "domain is required"})),
+            )
+                .into_response()
+        }
+    };
+
+    let email = match body.get("email").and_then(|v| v.as_str()) {
+        Some(e) if !e.is_empty() => e.to_string(),
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": "email is required"})),
+            )
+                .into_response()
+        }
+    };
+
+    let provider = body
+        .get("provider")
+        .and_then(|v| v.as_str())
+        .unwrap_or("manual")
+        .to_string();
+
+    let cloudflare_api_token = body
+        .get("cloudflare_api_token")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    if provider == "cloudflare" && cloudflare_api_token.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "cloudflare_api_token is required for cloudflare provider"})),
+        )
+            .into_response();
+    }
+
+    let use_staging = body
+        .get("use_staging")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    let acme_config = crate::config::AcmeConfig {
+        enabled: true,
+        domain: domain.clone(),
+        email: email.clone(),
+        provider: provider.clone(),
+        cloudflare_api_token: cloudflare_api_token.clone(),
+        use_staging,
+        last_renewed: String::new(),
+        last_renewal_error: String::new(),
+    };
+
+    // Save ACME config to file
+    if let Ok(mut config) = crate::config::Config::load(&state.config_path) {
+        config.tls.acme = acme_config.clone();
+        config.tls.cert_path = Some(crate::acme::CERT_PATH.to_string());
+        config.tls.key_path = Some(crate::acme::KEY_PATH.to_string());
+        let _ = config.save(&state.config_path);
+    }
+
+    let progress = state.acme.progress.clone();
+    let manual_confirm = state.acme.manual_confirm.clone();
+    let config_path = state.config_path.clone();
+    let restart_signal = state.restart_signal.clone();
+
+    tokio::spawn(async move {
+        match crate::acme::issue_certificate(&acme_config, progress.clone(), manual_confirm).await {
+            Ok(()) => {
+                // Update config timestamps on success
+                if let Ok(mut config) = crate::config::Config::load(&config_path) {
+                    config.tls.acme.last_renewed =
+                        chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC").to_string();
+                    config.tls.acme.last_renewal_error = String::new();
+                    let _ = config.save(&config_path);
+                }
+                let _ = restart_signal.send(true);
+            }
+            Err(e) => {
+                // Set progress to Failed
+                {
+                    let mut p = progress.write().await;
+                    p.state = crate::acme::IssuanceState::Failed;
+                    p.message = e.to_string();
+                }
+                // Save error to config
+                if let Ok(mut config) = crate::config::Config::load(&config_path) {
+                    config.tls.acme.last_renewal_error = e.to_string();
+                    let _ = config.save(&config_path);
+                }
+            }
+        }
+    });
+
+    Json(serde_json::json!({"status": "started"})).into_response()
+}
+
+async fn api_acme_confirm(
+    State(state): State<AppState>,
+    axum::Extension(user): axum::Extension<AuthenticatedUser>,
+) -> Response {
+    if !user.permissions.contains(&Permission::ManageSystem) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+
+    state.acme.manual_confirm.notify_one();
+
+    Json(serde_json::json!({"status": "confirmed"})).into_response()
+}
+
+async fn api_acme_status(
+    State(state): State<AppState>,
+    axum::Extension(user): axum::Extension<AuthenticatedUser>,
+) -> Response {
+    if !user.permissions.contains(&Permission::ManageSystem) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+
+    let progress = state.acme.progress.read().await.clone();
+
+    let acme_config = crate::config::Config::load(&state.config_path)
+        .map(|c| c.tls.acme)
+        .unwrap_or_default();
+
+    Json(serde_json::json!({
+        "progress": progress,
+        "config": {
+            "enabled": acme_config.enabled,
+            "domain": acme_config.domain,
+            "email": acme_config.email,
+            "provider": acme_config.provider,
+            "use_staging": acme_config.use_staging,
+            "last_renewed": acme_config.last_renewed,
+            "last_renewal_error": acme_config.last_renewal_error,
+        }
+    }))
+    .into_response()
+}
+
+async fn api_acme_renew(
+    State(state): State<AppState>,
+    axum::Extension(user): axum::Extension<AuthenticatedUser>,
+) -> Response {
+    if !user.permissions.contains(&Permission::ManageSystem) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+
+    let acme_config = match crate::config::Config::load(&state.config_path) {
+        Ok(c) if c.tls.acme.enabled && !c.tls.acme.domain.is_empty() => c.tls.acme,
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": "ACME is not configured"})),
+            )
+                .into_response()
+        }
+    };
+
+    let progress = state.acme.progress.clone();
+    let manual_confirm = state.acme.manual_confirm.clone();
+    let config_path = state.config_path.clone();
+    let restart_signal = state.restart_signal.clone();
+
+    tokio::spawn(async move {
+        match crate::acme::issue_certificate(&acme_config, progress.clone(), manual_confirm).await {
+            Ok(()) => {
+                if let Ok(mut config) = crate::config::Config::load(&config_path) {
+                    config.tls.acme.last_renewed =
+                        chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC").to_string();
+                    config.tls.acme.last_renewal_error = String::new();
+                    let _ = config.save(&config_path);
+                }
+                let _ = restart_signal.send(true);
+            }
+            Err(e) => {
+                {
+                    let mut p = progress.write().await;
+                    p.state = crate::acme::IssuanceState::Failed;
+                    p.message = e.to_string();
+                }
+                if let Ok(mut config) = crate::config::Config::load(&config_path) {
+                    config.tls.acme.last_renewal_error = e.to_string();
+                    let _ = config.save(&config_path);
+                }
+            }
+        }
+    });
+
+    Json(serde_json::json!({"status": "started"})).into_response()
 }
 
 async fn api_get_release_channel(

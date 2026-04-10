@@ -339,6 +339,7 @@ async fn main() -> anyhow::Result<()> {
         update_check_signal: update_check_tx,
         persistent_stats: persistent_stats.clone(),
         stats_retention_days: stats_retention_days.clone(),
+        acme: std::sync::Arc::new(crate::acme::AcmeState::new()),
     };
 
     // Spawn background blocklist refresh task
@@ -484,6 +485,17 @@ async fn main() -> anyhow::Result<()> {
                     tracing::debug!("Cache eviction: removed {} expired entries", removed);
                 }
             }
+        });
+    }
+
+    // Spawn ACME certificate renewal task (daily check)
+    {
+        let config_path = web_state.config_path.clone();
+        let progress = web_state.acme.progress.clone();
+        let manual_confirm = web_state.acme.manual_confirm.clone();
+        let restart_signal = web_state.restart_signal.clone();
+        tokio::spawn(async move {
+            crate::acme::renewal_loop(config_path, progress, manual_confirm, restart_signal).await;
         });
     }
 
