@@ -53,6 +53,7 @@ pub struct AppState {
     pub persistent_stats: crate::persistent_stats::PersistentStats,
     pub stats_retention_days: std::sync::Arc<tokio::sync::RwLock<u32>>,
     pub acme: std::sync::Arc<crate::acme::AcmeState>,
+    pub https_active: bool,
 }
 
 impl AppState {
@@ -294,6 +295,37 @@ async fn mark_https_middleware(
     next.run(request).await
 }
 
+/// Paths that handle sensitive data (passwords, API tokens, private keys)
+/// and must be accessed over HTTPS when it's available.
+const SENSITIVE_PATHS: &[&str] = &[
+    "/api/system/tls/upload",
+    "/api/system/tls/download",
+    "/api/system/tls/acme/issue",
+    "/api/auth/login",
+    "/api/auth/setup",
+    "/api/auth/change-password",
+];
+
+async fn sensitive_https_middleware(
+    axum::extract::State(https_active): axum::extract::State<bool>,
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    if https_active
+        && request.extensions().get::<IsHttps>().is_none()
+        && SENSITIVE_PATHS.iter().any(|p| request.uri().path() == *p)
+    {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({
+                "error": "This endpoint requires HTTPS. Use https:// to access the dashboard securely."
+            })),
+        )
+            .into_response();
+    }
+    next.run(request).await
+}
+
 pub async fn run_web_server(
     listen: &[String],
     https_listen: Option<&[String]>,
@@ -435,6 +467,11 @@ pub async fn run_web_server(
         .layer(axum::middleware::from_fn_with_state(
             auth_for_middleware,
             auth_middleware,
+        ))
+        // Enforce HTTPS on sensitive endpoints
+        .layer(axum::middleware::from_fn_with_state(
+            state.https_active,
+            sensitive_https_middleware,
         ))
         // Security headers on all responses
         .layer(axum::middleware::from_fn(security_headers_middleware))

@@ -340,6 +340,7 @@ async fn main() -> anyhow::Result<()> {
         persistent_stats: persistent_stats.clone(),
         stats_retention_days: stats_retention_days.clone(),
         acme: std::sync::Arc::new(crate::acme::AcmeState::new()),
+        https_active: config.web.https_listen.is_some(),
     };
 
     // Spawn background blocklist refresh task
