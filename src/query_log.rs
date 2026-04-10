@@ -255,10 +255,7 @@ impl QueryLog {
             .await?;
 
         if updated > 0 {
-            info!(
-                "Retroactively anonymized {} query log entries",
-                updated
-            );
+            info!("Retroactively anonymized {} query log entries", updated);
         }
         Ok(updated)
     }
