@@ -3424,6 +3424,12 @@
         <div class="cert-tab-content active" id="certTabStatus">
             <div class="cert-info-grid" id="certInfoGrid">Loading...</div>
             <div id="certRenewalInfo" style="font-size:13px;color:var(--text-muted);margin-bottom:16px;"></div>
+            <div id="autoRenewRow" style="display:none;margin-bottom:16px;">
+                <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer;">
+                    <input type="checkbox" id="autoRenewCheckbox" onchange="toggleAutoRenew(this.checked)">
+                    Auto-renew certificate <span style="color:var(--text-muted);">(Cloudflare only)</span>
+                </label>
+            </div>
             <div class="modal-actions">
                 <button class="btn btn-sm" style="background:var(--danger);color:#fff;" onclick="removeTlsCert()">Remove &amp; use self-signed</button>
             </div>
@@ -3538,13 +3544,38 @@
                 if (!res.ok) return;
                 const data = await res.json();
                 const info = document.getElementById('certRenewalInfo');
-                if (info && data.config && data.config.enabled) {
+                if (info && data.config && data.config.domain) {
                     let text = '';
                     if (data.config.last_renewed) text += 'Last renewed: ' + escapeHtml(data.config.last_renewed);
                     if (data.config.last_renewal_error) text += '<br>Last error: <span style="color:var(--danger)">' + escapeHtml(data.config.last_renewal_error) + '</span>';
                     info.innerHTML = text;
                 }
+                const autoRow = document.getElementById('autoRenewRow');
+                const autoBox = document.getElementById('autoRenewCheckbox');
+                if (autoRow && data.config && data.config.domain) {
+                    autoRow.style.display = '';
+                    if (autoBox) autoBox.checked = !!data.config.enabled;
+                } else if (autoRow) {
+                    autoRow.style.display = 'none';
+                }
             } catch (_) {}
+        }
+
+        async function toggleAutoRenew(enabled) {
+            try {
+                const res = await fetch('/api/system/tls/acme/auto-renew', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ enabled }),
+                });
+                if (!res.ok) {
+                    const text = await res.text();
+                    alert('Failed to update: ' + text);
+                    document.getElementById('autoRenewCheckbox').checked = !enabled;
+                }
+            } catch (_) {
+                document.getElementById('autoRenewCheckbox').checked = !enabled;
+            }
         }
 
         async function loadAcmeConfig() {

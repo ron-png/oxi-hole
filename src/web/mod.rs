@@ -405,6 +405,10 @@ pub async fn run_web_server(
         .route("/api/system/tls/acme/confirm", post(api_acme_confirm))
         .route("/api/system/tls/acme/status", get(api_acme_status))
         .route("/api/system/tls/acme/renew", post(api_acme_renew))
+        .route(
+            "/api/system/tls/acme/auto-renew",
+            post(api_acme_auto_renew),
+        )
         // Query log
         .route("/api/logs", get(api_logs))
         .route("/api/logs/settings", get(api_get_log_settings))
@@ -2494,6 +2498,45 @@ async fn api_acme_renew(
     });
 
     Json(serde_json::json!({"status": "started"})).into_response()
+}
+
+async fn api_acme_auto_renew(
+    State(state): State<AppState>,
+    axum::Extension(user): axum::Extension<AuthenticatedUser>,
+    axum::Json(body): axum::Json<serde_json::Value>,
+) -> Response {
+    if !user.permissions.contains(&Permission::ManageSystem) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+
+    let enabled = match body["enabled"].as_bool() {
+        Some(v) => v,
+        None => {
+            return (StatusCode::BAD_REQUEST, "Missing 'enabled' field").into_response();
+        }
+    };
+
+    match crate::config::Config::load(&state.config_path) {
+        Ok(mut config) => {
+            config.tls.acme.enabled = enabled;
+            if let Err(e) = config.save(&state.config_path) {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("Failed to save config: {}", e),
+                )
+                    .into_response();
+            }
+        }
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to load config: {}", e),
+            )
+                .into_response();
+        }
+    }
+
+    Json(serde_json::json!({"status": "ok", "enabled": enabled})).into_response()
 }
 
 async fn api_get_release_channel(
