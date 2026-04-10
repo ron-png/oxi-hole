@@ -34,6 +34,7 @@ rustls = { version = "0.23", features = ["ring"] }
 tokio-rustls = "0.26"
 rustls-pemfile = "2"
 rcgen = "0.13"
+instant-acme = "0.8"
 
 # QUIC (DNS-over-QUIC)
 quinn = "0.11"

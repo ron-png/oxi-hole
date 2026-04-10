@@ -83,6 +83,31 @@ pub struct WebConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct AcmeConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub domain: String,
+    #[serde(default)]
+    pub email: String,
+    /// "cloudflare" or "manual"
+    #[serde(default = "default_acme_provider")]
+    pub provider: String,
+    #[serde(default)]
+    pub cloudflare_api_token: String,
+    #[serde(default)]
+    pub use_staging: bool,
+    #[serde(default)]
+    pub last_renewed: String,
+    #[serde(default)]
+    pub last_renewal_error: String,
+}
+
+fn default_acme_provider() -> String {
+    "cloudflare".to_string()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct TlsConfig {
     /// Path to TLS certificate file (PEM). If not set, a self-signed cert is generated.
     #[serde(default)]
@@ -90,6 +115,8 @@ pub struct TlsConfig {
     /// Path to TLS private key file (PEM). If not set, a self-signed cert is generated.
     #[serde(default)]
     pub key_path: Option<String>,
+    #[serde(default)]
+    pub acme: AcmeConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
