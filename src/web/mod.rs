@@ -307,7 +307,9 @@ async fn mark_https_from_forwarded_proto_middleware(
 ) -> Response {
     let is_forwarded_https = request
         .headers()
-        .get("x-forwarded-proto")
+        .get_all("x-forwarded-proto")
+        .iter()
+        .last()  // last value wins in proxy chains — the trusted proxy's value
         .and_then(|v| v.to_str().ok())
         .map(|v| v.eq_ignore_ascii_case("https"))
         .unwrap_or(false);
@@ -910,8 +912,9 @@ async fn api_update_network(
     }
 
     if let Some(enabled) = req.trust_forwarded_proto {
+        let was_enabled = config.web.trust_forwarded_proto;
         config.web.trust_forwarded_proto = enabled;
-        if enabled {
+        if enabled && !was_enabled {
             tracing::warn!(
                 "web.trust_forwarded_proto enabled — ensure oxi-dns is ONLY reachable \
                  through a trusted TLS-terminating reverse proxy"
@@ -3074,6 +3077,51 @@ mod sensitive_https_middleware_tests {
             .method("POST")
             .uri("/api/system/tls/upload")
             .header("x-forwarded-proto", "http")
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn forwarded_proto_absent_header_is_not_trusted() {
+        let app = Router::new()
+            .route(
+                "/api/system/tls/upload",
+                post(|| async { StatusCode::OK }),
+            )
+            .layer(axum::middleware::from_fn(sensitive_https_middleware))
+            .layer(axum::middleware::from_fn(mark_https_from_forwarded_proto_middleware));
+
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/system/tls/upload")
+            .body(Body::empty())
+            .unwrap();
+        // No X-Forwarded-Proto header at all
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn forwarded_proto_uses_last_value_in_chain() {
+        // Simulate an attacker injecting x-forwarded-proto: https before a proxy
+        // that then appends x-forwarded-proto: http. The last value is the
+        // authoritative one from the trusted proxy, so the request should be
+        // treated as HTTP and blocked.
+        let app = Router::new()
+            .route(
+                "/api/system/tls/upload",
+                post(|| async { StatusCode::OK }),
+            )
+            .layer(axum::middleware::from_fn(sensitive_https_middleware))
+            .layer(axum::middleware::from_fn(mark_https_from_forwarded_proto_middleware));
+
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/system/tls/upload")
+            .header("x-forwarded-proto", "https")  // attacker-injected
+            .header("x-forwarded-proto", "http")   // trusted proxy appended
             .body(Body::empty())
             .unwrap();
         let resp = app.oneshot(req).await.unwrap();
