@@ -1678,6 +1678,12 @@
             font-size: 15px;
             padding: 10px 24px;
         }
+        .reload-required-actions {
+            display: flex;
+            gap: 10px;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
 
         .cert-tabs { display: flex; gap: 0; border-bottom: 1px solid var(--border); margin-bottom: 16px; }
         .cert-tab { padding: 8px 16px; cursor: pointer; border: none; background: none; color: var(--text-muted); font-size: 13px; border-bottom: 2px solid transparent; }
@@ -2983,10 +2989,11 @@
                 }
                 closeModal();
                 // If the current user just reset their own password (the
-                // banner path for non-root users lands here), the
-                // rotation nag no longer applies — hide it immediately
-                // instead of waiting for the next security-status poll.
+                // banner path for non-root users lands here), their
+                // session was invalidated server-side. Bounce them to
+                // the login page with a confirmation.
                 if (currentUser && userId === currentUser.id) {
+                    alert('Password changed successfully. You will now be returned to the login page.');
                     onOwnPasswordChanged();
                 }
             } catch (e) { alert('Error: ' + e.message); }
@@ -3041,29 +3048,24 @@
                     return;
                 }
                 closeModal();
+                alert('Password changed successfully. You will now be returned to the login page.');
                 onOwnPasswordChanged();
-                alert('Password changed successfully.');
             } catch (e) { alert('Error: ' + e.message); }
         }
 
         // Called from every code path that successfully changes the
-        // authenticated user's own password. The backend has already
-        // cleared password_change_recommended for this user as part of
-        // the same UPDATE — hide the banner now so the UI reflects that
-        // immediately, without waiting for (and possibly missing, if
-        // sessions were invalidated) the next security-status poll.
+        // authenticated user's own password. The backend invalidates all
+        // sessions for the user as part of the same update, so the
+        // current cookie is dead — redirect to /login instead of
+        // letting the next API call silently 401.
         function onOwnPasswordChanged() {
-            const banner = document.getElementById('passwordRotationBanner');
-            if (banner) banner.style.display = 'none';
-            // Also clear any session-scoped "Not now" dismiss, so if the
-            // flag is re-set later we don't double-suppress the banner.
+            // Clear the session-scoped "Not now" dismiss so the rotation
+            // banner can come back cleanly if HTTPS is ever toggled off
+            // and on again in the future.
             try {
                 sessionStorage.removeItem(passwordRotationDismissKey());
             } catch (_) { /* ignore */ }
-            // Refresh in the background so other security-state fields
-            // (like the update banner) stay fresh. Failures are fine —
-            // the DOM is already in the desired state.
-            refreshSecurityStatus();
+            window.location.href = '/login';
         }
 
         async function deleteUser(userId, username) {
@@ -4530,46 +4532,38 @@
             checkNetworkChanges();
         }
 
-        async function toggleAutoRedirectHttps(enabled) {
-            const toggle = document.getElementById('toggle-auto-redirect-https');
-            if (toggle) toggle.disabled = true;
-            try {
-                const res = await fetch('/api/system/network', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ auto_redirect_https: enabled })
-                });
-                if (!res.ok) throw new Error('Failed to update auto_redirect_https');
-                const data = await res.json();
-                serverNetworkState.auto_redirect_https = data.auto_redirect_https ?? enabled;
-                refreshSecurityStatus();
-                // Toggling this setting restarts the web server and changes
-                // whether HTTP is redirected. The page MUST be reloaded
-                // for the new state to take effect — force the user via
-                // a blocking overlay instead of silently reloading.
-                showReloadRequiredModal();
-            } catch (e) {
-                console.error(e);
-                if (toggle) toggle.checked = !enabled;
-                if (toggle) toggle.disabled = false;
-            }
+        function toggleAutoRedirectHttps(enabled) {
+            // Don't persist anything yet. Flipping auto-redirect bounces
+            // the web server and forces the current tab to reload, so
+            // confirm with the user first. The POST / restart / reload
+            // all happen from the confirmation modal's primary action;
+            // "Cancel" reverts the checkbox to its previous state and
+            // nothing is sent to the backend.
+            showReloadRequiredModal(enabled);
         }
 
-        function showReloadRequiredModal() {
+        // Confirmation modal for flipping auto_redirect_https. The
+        // change is pending (nothing has been POSTed yet) — confirm
+        // sends it, cancel reverts the checkbox. The user MUST reload
+        // after confirming, because flipping this setting restarts the
+        // web server and the current tab's redirect behavior changes.
+        function showReloadRequiredModal(pendingEnabled) {
             if (document.getElementById('reloadRequiredOverlay')) return;
             const overlay = document.createElement('div');
             overlay.id = 'reloadRequiredOverlay';
             overlay.setAttribute('role', 'alertdialog');
             overlay.setAttribute('aria-modal', 'true');
+            const action = pendingEnabled ? 'Enable' : 'Disable';
             overlay.innerHTML = `
                 <div class="reload-required-box">
-                    <div class="reload-required-title">⚠ Reload required</div>
+                    <div class="reload-required-title">⚠ ${action} HTTP→HTTPS redirect?</div>
                     <div class="reload-required-body">
                         <p>
-                            The HTTPS redirect setting has been changed and the
-                            web server has been restarted. You <strong>must
-                            reload this page</strong> for the new behaviour to
-                            take effect.
+                            Confirming will
+                            ${pendingEnabled ? 'enable' : 'disable'}
+                            the HTTP→HTTPS redirect, <strong>restart the
+                            web server</strong>, and reload this page so
+                            the new behaviour takes effect.
                         </p>
                         <p>
                             If the page looks broken or keeps sending you to the
@@ -4583,15 +4577,65 @@
                             for this site manually.
                         </p>
                     </div>
-                    <button type="button" class="btn btn-accent" id="reloadRequiredBtn">Reload now</button>
+                    <div class="reload-required-actions">
+                        <button type="button" class="btn btn-sm" id="reloadRequiredCancelBtn">Cancel</button>
+                        <button type="button" class="btn btn-accent" id="reloadRequiredBtn">Confirm and reload now</button>
+                    </div>
                 </div>
             `;
-            // Block every key and scroll event outside the dialog while
-            // the overlay is up — the only valid action is "reload".
             document.body.appendChild(overlay);
             document.body.style.overflow = 'hidden';
-            document.getElementById('reloadRequiredBtn').addEventListener('click', () => {
-                window.location.reload();
+
+            const confirmBtn = document.getElementById('reloadRequiredBtn');
+            const cancelBtn = document.getElementById('reloadRequiredCancelBtn');
+            const toggle = document.getElementById('toggle-auto-redirect-https');
+
+            // Confirm → persist, trigger restart, reload this tab.
+            confirmBtn.addEventListener('click', async () => {
+                confirmBtn.disabled = true;
+                cancelBtn.disabled = true;
+                confirmBtn.textContent = 'Saving\u2026';
+                if (toggle) toggle.disabled = true;
+                try {
+                    const res = await fetch('/api/system/network', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ auto_redirect_https: pendingEnabled })
+                    });
+                    if (!res.ok) throw new Error('Failed to update auto_redirect_https');
+                    const data = await res.json();
+                    serverNetworkState.auto_redirect_https =
+                        data.auto_redirect_https ?? pendingEnabled;
+                    window.location.reload();
+                } catch (e) {
+                    console.error(e);
+                    confirmBtn.disabled = false;
+                    cancelBtn.disabled = false;
+                    confirmBtn.textContent = 'Confirm and reload now';
+                    // Show error inline so the user isn't stuck in the
+                    // modal with no feedback.
+                    const body = overlay.querySelector('.reload-required-body');
+                    if (body && !body.querySelector('.reload-required-error')) {
+                        const err = document.createElement('p');
+                        err.className = 'reload-required-error';
+                        err.style.color = 'var(--color-red)';
+                        err.textContent = 'Failed to save. Please try again.';
+                        body.appendChild(err);
+                    }
+                    if (toggle) toggle.disabled = false;
+                }
+            });
+
+            // Cancel → revert the checkbox to its previous state (the
+            // opposite of the pending value) and close the modal. No
+            // backend call was made, so nothing to roll back server-side.
+            cancelBtn.addEventListener('click', () => {
+                if (toggle) {
+                    toggle.checked = !pendingEnabled;
+                    toggle.disabled = false;
+                }
+                overlay.remove();
+                document.body.style.overflow = '';
             });
         }
 
