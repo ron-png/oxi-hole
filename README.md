@@ -223,6 +223,23 @@ The image ships with the project's default `config.toml` (Quad9 over DoT as upst
 
 > **Note on auto-update.** The in-process auto-updater is **disabled by default** and should stay off in containers — pull a new image tag instead. The systemd / launchd zero-downtime update flow described above does not apply to the Docker image.
 
+#### Certificates in containers
+
+The HTTPS dashboard cert workflows all *function* in the image, but the in-process zero-downtime restart that normally swaps a new cert into the running server falls back to a full container restart. Here's what to expect:
+
+| Cert source | Behaviour in container |
+|---|---|
+| **Self-signed (default)** | Generated in memory at startup, no disk, no restart. Works fully. The SANs cover `localhost`, `oxi-dns.local`, and the container's interface IPs — browsers will still warn on the host IP, same as bare metal. |
+| **Manual upload** (Advanced → Certificates) | The uploaded `cert.pem` / `key.pem` are written into `/etc/oxi-dns/` on the persistent volume and `config.toml` is updated to point at them. The server then tries an in-process graceful restart, but since oxi-dns runs as PID 1 inside the container the spawned takeover child gets SIGKILL'd as soon as the parent exits. The container terminates and Docker has to restart it — about 1–3 s of DNS downtime instead of zero. |
+| **ACME / Let's Encrypt** | Issuance works (DNS-01 only — no inbound port 80 needed; Cloudflare-API and manual confirmation modes are both supported). Install hits the same restart path as manual upload, and the auto-renewal loop will hard-restart the container roughly every 60 days when a 90-day Let's Encrypt cert enters its 30-day renewal window. |
+| **Built-in auto-update** | Don't enable. The updater rewrites `/usr/local/bin/oxi-dns`, which is image-layer storage and is lost on container recreation. |
+
+**Implications for your run command:**
+
+- **Always pass `--restart unless-stopped`** (or a Compose `restart: unless-stopped`) if you plan to use manual upload or ACME — without it, the container stays stopped after the first cert install or renewal.
+- **Keep the volume mounted at `/etc/oxi-dns`.** ACME writes to a hardcoded `/etc/oxi-dns/cert.pem` / `/etc/oxi-dns/key.pem` path; if you remap the config to a different directory, ACME will write the renewed cert into a location the running config no longer references.
+- For ACME, prefer the **Cloudflare** provider over manual mode — manual mode requires you to be at the dashboard to confirm each renewal, which doesn't pair well with an unattended container.
+
 ## Configuration
 
 Default config (`config.toml`):
