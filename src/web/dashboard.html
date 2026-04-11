@@ -2061,6 +2061,21 @@
             <a id="passwordRotationBtn" class="security-banner__action" href="#">Change password →</a>
             <button type="button" id="passwordRotationDismissBtn" class="security-banner__dismiss">Not now</button>
         </div>
+        <!-- Update-available banner. Shown only when an update exists AND
+             the running instance will not apply it automatically: either
+             auto-update is off, or we're inside a container where the
+             in-place updater can't persist changes. No "Not now" — the
+             backend state is the source of truth: install the update or
+             clear auto-update blockers and the banner disappears on the
+             next security-status poll. -->
+        <div id="updateAvailableBanner" class="security-banner security-banner--warning" style="display:none;">
+            <span class="security-banner__icon">⬆</span>
+            <div class="security-banner__body">
+                <strong id="updateBannerTitle">An update is available.</strong>
+                <span id="updateBannerText"></span>
+            </div>
+            <a id="updateBannerBtn" class="security-banner__action" href="#">Update →</a>
+        </div>
         <!-- Auto-update status notification -->
         <div id="updateNotification"
             style="display: none; padding: 12px 16px; border-radius: 8px; margin-bottom: 16px; position: relative;">
@@ -2359,7 +2374,7 @@
             </div>
 
             <!-- Certificate Management -->
-            <div class="section manage-system-only" data-requires-https="true">
+            <div class="section manage-system-only">
                 <h2>TLS Certificate</h2>
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
                     <span style="font-size: 13px; color: var(--text-muted);" id="certSummary">Loading certificate info...</span>
@@ -2394,7 +2409,7 @@
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
                     <span style="font-size: 13px; color: var(--text-muted);">Personal access tokens for API
                         authentication</span>
-                    <button type="button" class="btn btn-accent btn-sm" data-requires-https="true" onclick="showCreateTokenModal()">Create Token</button>
+                    <button type="button" class="btn btn-accent btn-sm" onclick="showCreateTokenModal()">Create Token</button>
                 </div>
                 <table>
                     <thead>
@@ -2456,32 +2471,6 @@
                                     <div class="network-port-label">IPv6 Port</div>
                                     <input type="number" id="net-web-ipv6-port" placeholder="9853" min="1" max="65535" inputmode="numeric" onbeforeinput="preventInvalidPortInput(event)" oninput="handleNetworkPortInput(this)">
                                     <div class="listen-target" id="net-web-ipv6-target"></div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="network-field">
-                        <label>Web Dashboard (HTTPS)</label>
-                        <div class="proto-toggle">
-                            <label class="toggle-switch"><input type="checkbox" id="toggle-web-https"
-                                    onchange="toggleProtocol('https', this.checked)"><span
-                                    class="toggle-slider"></span></label>
-                            <div class="network-input-stack">
-                                <div class="network-port-grid">
-                                    <div class="network-port-card">
-                                        <div class="network-port-label">IPv4 Port</div>
-                                        <input type="number" id="net-web-https-ipv4-port" placeholder="9854" min="1" max="65535" inputmode="numeric" onbeforeinput="preventInvalidPortInput(event)" oninput="handleNetworkPortInput(this)" disabled>
-                                        <div class="listen-target" id="net-web-https-ipv4-target"></div>
-                                    </div>
-                                    <div class="network-port-card">
-                                        <div class="network-port-label">IPv6 Port</div>
-                                        <input type="number" id="net-web-https-ipv6-port" placeholder="9854" min="1" max="65535" inputmode="numeric" onbeforeinput="preventInvalidPortInput(event)" oninput="handleNetworkPortInput(this)" disabled>
-                                        <div class="listen-target" id="net-web-https-ipv6-target"></div>
-                                    </div>
-                                </div>
-                                <div id="https-save-row" style="display:none; margin-top:10px; align-items:center; gap:10px; flex-wrap:wrap;">
-                                    <button id="https-save-btn" class="btn btn-sm btn-accent" onclick="saveHttpsSettings()">Save HTTPS Port</button>
-                                    <span id="https-save-status" style="font-size:12px; color:var(--text-muted);"></span>
                                 </div>
                             </div>
                         </div>
@@ -2782,6 +2771,27 @@
             document.getElementById('modalContent').innerHTML = '';
         }
 
+        // Shared "this feature requires HTTPS" modal. Used by every
+        // sensitive action on the dashboard — change password, manage
+        // certificates, create API token — so the user gets the same
+        // prompt instead of three different greyed-out / disabled /
+        // inline-warning treatments.
+        function showHttpsRequiredModal(title, actionText) {
+            const httpsUrl = cachedHttpsUrl;
+            openModal(`
+                <h3>${escapeHtml(title)}</h3>
+                <div class="sensitive-warning">
+                    <span class="sensitive-warning__icon">🔒</span>
+                    <div class="sensitive-warning__title">This feature requires HTTPS</div>
+                    <div>You're connected over plain HTTP. Switch to HTTPS to ${escapeHtml(actionText)}.</div>
+                    ${httpsUrl ? `<a class="sensitive-warning__btn" href="${httpsUrl}">Switch to HTTPS →</a>` : ''}
+                </div>
+                <div class="modal-actions">
+                    <button class="btn btn-sm" onclick="closeModal()">Cancel</button>
+                </div>
+            `);
+        }
+
         // ---- User Management ----
         async function refreshUsers() {
             if (!hasPerm('manage_users')) return;
@@ -2972,6 +2982,13 @@
                     return;
                 }
                 closeModal();
+                // If the current user just reset their own password (the
+                // banner path for non-root users lands here), the
+                // rotation nag no longer applies — hide it immediately
+                // instead of waiting for the next security-status poll.
+                if (currentUser && userId === currentUser.id) {
+                    onOwnPasswordChanged();
+                }
             } catch (e) { alert('Error: ' + e.message); }
         }
 
@@ -2982,19 +2999,7 @@
             // HTTP unconditionally — mirror that in the UI with a clear
             // warning instead of a broken form.
             if (window.location.protocol === 'http:') {
-                const httpsUrl = cachedHttpsUrl;
-                openModal(`
-                    <h3>Change Password</h3>
-                    <div class="sensitive-warning">
-                        <span class="sensitive-warning__icon">🔒</span>
-                        <div class="sensitive-warning__title">This feature requires HTTPS</div>
-                        <div>You're connected over plain HTTP. Switch to HTTPS to change your password.</div>
-                        ${httpsUrl ? `<a class="sensitive-warning__btn" href="${httpsUrl}">Switch to HTTPS →</a>` : ''}
-                    </div>
-                    <div class="modal-actions">
-                        <button class="btn btn-sm" onclick="closeModal()">Cancel</button>
-                    </div>
-                `);
+                showHttpsRequiredModal('Change Password', 'change your password');
                 return;
             }
             openModal(`
@@ -3036,9 +3041,29 @@
                     return;
                 }
                 closeModal();
+                onOwnPasswordChanged();
                 alert('Password changed successfully.');
-                refreshSecurityStatus();
             } catch (e) { alert('Error: ' + e.message); }
+        }
+
+        // Called from every code path that successfully changes the
+        // authenticated user's own password. The backend has already
+        // cleared password_change_recommended for this user as part of
+        // the same UPDATE — hide the banner now so the UI reflects that
+        // immediately, without waiting for (and possibly missing, if
+        // sessions were invalidated) the next security-status poll.
+        function onOwnPasswordChanged() {
+            const banner = document.getElementById('passwordRotationBanner');
+            if (banner) banner.style.display = 'none';
+            // Also clear any session-scoped "Not now" dismiss, so if the
+            // flag is re-set later we don't double-suppress the banner.
+            try {
+                sessionStorage.removeItem(passwordRotationDismissKey());
+            } catch (_) { /* ignore */ }
+            // Refresh in the background so other security-state fields
+            // (like the update banner) stay fresh. Failures are fine —
+            // the DOM is already in the desired state.
+            refreshSecurityStatus();
         }
 
         async function deleteUser(userId, username) {
@@ -3082,6 +3107,14 @@
         }
 
         function showCreateTokenModal() {
+            // Creating a token over HTTP would echo the fresh secret back
+            // in the response body in plaintext — refuse on the frontend
+            // with the same "requires HTTPS" prompt as the other sensitive
+            // actions. The backend blocks POST /api/tokens on HTTP too.
+            if (window.location.protocol === 'http:') {
+                showHttpsRequiredModal('Create API Token', 'create an API token');
+                return;
+            }
             const permChecks = ALL_PERMISSIONS
                 .filter(p => hasPerm(p))
                 .map(p => `<label><input type="checkbox" name="tokenperm" value="${p}"> ${p}</label>`)
@@ -3694,6 +3727,14 @@
         let acmePollTimer = null;
 
         function showCertModal() {
+            // TLS certificate upload / ACME issuance / download all
+            // handle private key material. The backend blocks these
+            // endpoints on HTTP unconditionally — show the same
+            // "requires HTTPS" prompt the other sensitive actions use.
+            if (window.location.protocol === 'http:') {
+                showHttpsRequiredModal('Manage Certificates', 'manage TLS certificates');
+                return;
+            }
             const html = `
         <h3>Certificate Management</h3>
         <div class="cert-tabs">
@@ -4063,10 +4104,14 @@
         let networkInputsInitialized = false;
         let bannerDismissed = false;
         let dismissedNetworkSignature = '';
+        // HTTPS for the web dashboard is always on (default port 9854,
+        // configured via the web.https_listen field in the config file).
+        // It intentionally has no UI toggle — the dashboard's sensitive
+        // flows (cert upload, token creation, password changes) require
+        // HTTPS, so turning it off would brick those features.
         const NETWORK_LISTENERS = [
             { prefix: 'net-dns', key: 'dns.listen', serverKey: 'dns_listen', label: 'DNS Server', required: true, defaultPort: '53' },
             { prefix: 'net-web', key: 'web.listen', serverKey: 'web_listen', label: 'Web Dashboard (HTTP)', required: true, defaultPort: '9853' },
-            { prefix: 'net-web-https', key: 'web.https_listen', serverKey: 'https_listen', label: 'Web Dashboard (HTTPS)', required: false, toggleId: 'toggle-web-https', proto: 'https', defaultPort: '9854' },
             { prefix: 'net-dot', key: 'dns.dot_listen', serverKey: 'dot_listen', label: 'DNS-over-TLS', required: false, toggleId: 'toggle-dot', proto: 'dot', defaultPort: '853' },
             { prefix: 'net-doh', key: 'dns.doh_listen', serverKey: 'doh_listen', label: 'DNS-over-HTTPS', required: false, toggleId: 'toggle-doh', proto: 'doh', defaultPort: '443' },
             { prefix: 'net-doq', key: 'dns.doq_listen', serverKey: 'doq_listen', label: 'DNS-over-QUIC', required: false, toggleId: 'toggle-doq', proto: 'doq', defaultPort: '853' },
@@ -4147,12 +4192,14 @@
                 }
             }
 
-            // Sync the auto-redirect toggle from the server state
+            // Sync the auto-redirect toggle from the server state.
+            // HTTPS is always configured (there's no UI toggle to turn
+            // it off any more), so the auto-redirect toggle is always
+            // enabled — the server validates that https_listen is set
+            // before accepting auto_redirect_https = true.
             const autoRedirectToggle = document.getElementById('toggle-auto-redirect-https');
             if (autoRedirectToggle) {
                 autoRedirectToggle.checked = !!serverNetworkState.auto_redirect_https;
-                const httpsListen = serverNetworkState.https_listen;
-                autoRedirectToggle.disabled = !httpsListen || (Array.isArray(httpsListen) && httpsListen.length === 0);
             }
 
             // Sync the trust-forwarded-proto toggle from the server state
@@ -4443,8 +4490,6 @@
         function getNetworkReconfigureChanges() {
             const changes = [];
             for (const listener of NETWORK_LISTENERS) {
-                // HTTPS port is saved via POST /api/system/network, not via --reconfigure
-                if (listener.proto === 'https') continue;
                 const serverValues = getServerListenValues(listener);
                 const desiredValues = listener.toggleId && !document.getElementById(listener.toggleId).checked
                     ? []
@@ -4479,19 +4524,6 @@
                 input.disabled = !enabled;
                 if (enabled && !input.value && listener.defaultPort) {
                     input.value = listener.defaultPort;
-                }
-            }
-
-            if (proto === 'https' && !enabled) {
-                const redirectToggle = document.getElementById('toggle-auto-redirect-https');
-                if (redirectToggle) {
-                    redirectToggle.checked = false;
-                    redirectToggle.disabled = true;
-                }
-            } else if (proto === 'https' && enabled) {
-                const redirectToggle = document.getElementById('toggle-auto-redirect-https');
-                if (redirectToggle) {
-                    redirectToggle.disabled = false;
                 }
             }
 
@@ -4586,91 +4618,8 @@
             }
         }
 
-        function checkHttpsSaveButton() {
-            const httpsListener = NETWORK_LISTENERS.find(l => l.proto === 'https');
-            if (!httpsListener) return;
-
-            const saveRow = document.getElementById('https-save-row');
-            const saveBtn = document.getElementById('https-save-btn');
-            if (!saveRow || !saveBtn) return;
-
-            const toggleChecked = document.getElementById(httpsListener.toggleId)?.checked ?? false;
-            const desiredValues = toggleChecked ? buildDesiredListenValues(httpsListener) : [];
-            const serverValues = getServerListenValues(httpsListener);
-            const hasPendingChanges = !arraysEqual(desiredValues, serverValues);
-
-            if (hasPendingChanges) {
-                saveRow.style.display = 'flex';
-                const statusEl = document.getElementById('https-save-status');
-                if (statusEl && statusEl.textContent === 'Saved') {
-                    statusEl.textContent = '';
-                }
-            } else {
-                saveRow.style.display = 'none';
-            }
-        }
-
-        async function saveHttpsSettings() {
-            const httpsListener = NETWORK_LISTENERS.find(l => l.proto === 'https');
-            if (!httpsListener) return;
-
-            const saveBtn = document.getElementById('https-save-btn');
-            const statusEl = document.getElementById('https-save-status');
-            const toggleChecked = document.getElementById(httpsListener.toggleId)?.checked ?? false;
-
-            // Validate ports before saving
-            if (toggleChecked) {
-                const ipv4State = getFamilyEditState(httpsListener.prefix, 'ipv4');
-                const ipv6State = getFamilyEditState(httpsListener.prefix, 'ipv6');
-                const activeStates = [ipv4State, ipv6State].filter(s => s.kind !== 'disabled');
-
-                for (const [family, state] of [['IPv4', ipv4State], ['IPv6', ipv6State]]) {
-                    if (state.kind === 'ambiguous-edit') {
-                        if (statusEl) statusEl.textContent = `${family} uses an unbracketed IPv6 address. Bracket it first.`;
-                        return;
-                    }
-                    if (state.kind === 'port' && !isValidPort(state.port)) {
-                        if (statusEl) statusEl.textContent = `${family} port must be between 1 and 65535.`;
-                        return;
-                    }
-                }
-
-                if (activeStates.length === 0) {
-                    if (statusEl) statusEl.textContent = 'Requires an IPv4 or IPv6 port when enabled.';
-                    return;
-                }
-            }
-
-            const desiredValues = toggleChecked ? buildDesiredListenValues(httpsListener) : [];
-
-            if (saveBtn) saveBtn.disabled = true;
-            if (statusEl) statusEl.textContent = 'Saving\u2026';
-
-            try {
-                const res = await fetch('/api/system/network', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ https_listen: desiredValues })
-                });
-                if (!res.ok) throw new Error('Failed to save HTTPS settings');
-                const data = await res.json();
-                serverNetworkState.https_listen = data.https_listen ?? desiredValues;
-                if (statusEl) statusEl.textContent = 'Saved';
-                syncNetworkInputsFromServer();
-                checkHttpsSaveButton();
-                refreshSecurityStatus();
-            } catch (e) {
-                console.error(e);
-                if (statusEl) statusEl.textContent = 'Save failed. Try again.';
-            } finally {
-                if (saveBtn) saveBtn.disabled = false;
-            }
-        }
-
         function getNetworkValidationError() {
             for (const listener of NETWORK_LISTENERS) {
-                // HTTPS validation is handled separately in saveHttpsSettings()
-                if (listener.proto === 'https') continue;
                 if (listener.toggleId && !document.getElementById(listener.toggleId).checked) {
                     continue;
                 }
@@ -4702,7 +4651,6 @@
 
         function checkNetworkChanges() {
             renderNetworkTargets();
-            checkHttpsSaveButton();
             const changes = getNetworkReconfigureChanges();
             const banner = document.getElementById('reconfigBanner');
             const validationError = getNetworkValidationError();
@@ -4853,6 +4801,9 @@
                     body: JSON.stringify({ enabled })
                 });
                 if (!res.ok) throw new Error('Failed to update');
+                // The update banner depends on this flag, refresh so
+                // flipping the toggle shows or hides the banner now.
+                refreshSecurityStatus();
             } catch (e) {
                 console.error(e);
                 document.getElementById('autoUpdateCheckbox').checked = !enabled;
@@ -5509,31 +5460,20 @@
         }
 
         // ---- HTTP warning banner ----
-        // These run unconditionally whenever the dashboard is loaded over
-        // plain HTTP. TLS endpoints and password changes are blocked by
-        // the backend regardless of the auto_redirect_https toggle — so
-        // the UI must always warn about them and grey out their entry
-        // points when the user is on HTTP.
+        // Shown whenever the dashboard is loaded over plain HTTP. TLS
+        // endpoints, API token creation, and password changes are blocked
+        // by the backend regardless of the auto_redirect_https toggle —
+        // the banner is the top-level warning, and clicking any of the
+        // individual sensitive actions opens `showHttpsRequiredModal`
+        // with the same "Switch to HTTPS" prompt.
         let cachedHttpsUrl = null;
-
-        function lockSensitiveElements() {
-            document.querySelectorAll('[data-requires-https="true"]').forEach((el) => {
-                el.classList.add('sensitive-locked');
-                el.setAttribute('aria-disabled', 'true');
-                if (el.tagName === 'BUTTON' || el.tagName === 'INPUT') {
-                    el.disabled = true;
-                }
-            });
-        }
 
         (function setupHttpBanner() {
             const banner = document.getElementById('httpWarningBanner');
             if (!banner) return;
             if (window.location.protocol !== 'http:') return;
 
-            // On HTTP, always warn and grey out sensitive entry points.
             banner.style.display = 'flex';
-            lockSensitiveElements();
 
             const btn = document.getElementById('httpWarningSwitchBtn');
             if (!btn) return;
@@ -5582,23 +5522,79 @@
                 const res = await fetch('/api/system/security-status', { credentials: 'include' });
                 if (!res.ok) return;
                 const status = await res.json();
+
                 const banner = document.getElementById('passwordRotationBanner');
-                if (!banner) return;
-                const dismissed = sessionStorage.getItem(passwordRotationDismissKey()) === '1';
-                // Only show on HTTPS — on HTTP, the HTTP banner takes precedence
-                // and the user can't actually change their password anyway
-                if (
-                    status.password_change_recommended &&
-                    window.location.protocol === 'https:' &&
-                    !dismissed
-                ) {
-                    banner.style.display = 'flex';
-                } else {
-                    banner.style.display = 'none';
+                if (banner) {
+                    const dismissed = sessionStorage.getItem(passwordRotationDismissKey()) === '1';
+                    // Only show on HTTPS — on HTTP, the HTTP banner takes precedence
+                    // and the user can't actually change their password anyway
+                    if (
+                        status.password_change_recommended &&
+                        window.location.protocol === 'https:' &&
+                        !dismissed
+                    ) {
+                        banner.style.display = 'flex';
+                    } else {
+                        banner.style.display = 'none';
+                    }
                 }
+
+                updateUpdateBanner(status);
             } catch (e) {
                 // Silent — banner just doesn't show
             }
+        }
+
+        function updateUpdateBanner(status) {
+            const banner = document.getElementById('updateAvailableBanner');
+            if (!banner) return;
+            if (!status.update_banner) {
+                banner.style.display = 'none';
+                return;
+            }
+
+            const latest = status.latest_version ? 'v' + status.latest_version : 'a new version';
+            const titleEl = document.getElementById('updateBannerTitle');
+            const textEl = document.getElementById('updateBannerText');
+            const btn = document.getElementById('updateBannerBtn');
+
+            if (status.is_container) {
+                // In-place updater can't persist inside a container — the
+                // operator has to pull a new image themselves.
+                titleEl.textContent = 'Update available (' + latest + ').';
+                textEl.textContent = " You're running inside a container, so pull the new oxi-dns image and recreate the container to update.";
+                if (status.release_url) {
+                    btn.href = status.release_url;
+                    btn.target = '_blank';
+                    btn.rel = 'noopener';
+                    btn.textContent = 'View release \u2192';
+                    btn.style.display = '';
+                } else {
+                    btn.style.display = 'none';
+                }
+            } else {
+                // Non-container host with auto-update turned off: we can
+                // trigger the in-place update from the dashboard. Link
+                // scrolls to the System Settings section where the user
+                // can click the real "Update" button.
+                titleEl.textContent = 'Update available (' + latest + ').';
+                textEl.textContent = ' Auto-update is off — install it from System Settings or turn auto-update on.';
+                btn.href = '#';
+                btn.target = '_self';
+                btn.removeAttribute('rel');
+                btn.textContent = 'Go to update \u2192';
+                btn.style.display = '';
+                btn.onclick = (e) => {
+                    e.preventDefault();
+                    setMode('advanced');
+                    setTimeout(() => {
+                        const el = document.getElementById('currentVersion');
+                        if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    }, 100);
+                };
+            }
+
+            banner.style.display = 'flex';
         }
 
         // Open whatever modal the Users-list row for the current user

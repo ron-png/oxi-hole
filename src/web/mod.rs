@@ -2067,12 +2067,48 @@ async fn api_security_status(
     // different users on the same browser can independently dismiss
     // (or satisfy) it without affecting each other.
     let password_change_recommended = state.auth.get_password_change_recommended(user.id).await;
+
+    // Update advisory: show a banner whenever an update is available AND
+    // the running instance will *not* apply it automatically. Two cases
+    // count as "won't apply automatically":
+    //   1. auto_update is off                — nothing will ever pull it
+    //   2. we're running inside a container  — the background updater
+    //      rewrites the binary on disk, but that binary is discarded
+    //      when the container exits, so the user has to update the image
+    //      themselves
+    // Uses the cached version check; no extra GitHub traffic on each call.
+    let channel = state.release_channel.read().await.clone();
+    let version_info = state.update_checker.check(false, &channel).await;
+    let auto_update_enabled = *state.auto_update.read().await;
+    let is_container = running_in_container();
+    let update_banner = version_info.update_available && (!auto_update_enabled || is_container);
+
     Json(serde_json::json!({
         "is_https_request": is_https_request,
         "password_change_recommended": password_change_recommended,
         "https_available": config.web.https_listen.is_some(),
+        "update_available": version_info.update_available,
+        "latest_version": version_info.latest_version,
+        "current_version": version_info.current_version,
+        "release_url": version_info.release_url,
+        "auto_update_enabled": auto_update_enabled,
+        "is_container": is_container,
+        "update_banner": update_banner,
     }))
     .into_response()
+}
+
+/// Detect whether this process is running inside a container runtime.
+/// Docker drops `/.dockerenv`; Podman drops `/run/.containerenv`. The
+/// answer does not change at runtime, so we cache it behind a `OnceLock`
+/// rather than stat-ing on every status poll.
+fn running_in_container() -> bool {
+    use std::sync::OnceLock;
+    static CACHED: OnceLock<bool> = OnceLock::new();
+    *CACHED.get_or_init(|| {
+        std::path::Path::new("/.dockerenv").exists()
+            || std::path::Path::new("/run/.containerenv").exists()
+    })
 }
 
 // ==================== IPv6 (AAAA) Toggle ====================
