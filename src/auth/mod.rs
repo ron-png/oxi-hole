@@ -220,7 +220,35 @@ impl AuthService {
         password::verify_password(password, &user_with_hash.password_hash)
     }
 
+    /// Reset another user's password (admin action). Used by the
+    /// `ManageUsers` permission via `POST /api/users/{id}/reset-password`.
+    /// This intentionally rejects the root account — otherwise any admin
+    /// with `ManageUsers` could change root's password and log in as
+    /// root, defeating the "root always exists" guarantee. Root must
+    /// change its own password via `change_password_self`.
     pub async fn reset_password(&self, user_id: i64, new_password: &str) -> anyhow::Result<()> {
+        let target = self
+            .db
+            .get_user_by_id(user_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("User not found"))?;
+        if target.is_root {
+            anyhow::bail!("Cannot reset the root user's password; the root user must change it themselves");
+        }
+        self.set_password(user_id, new_password).await
+    }
+
+    /// Change the authenticated user's own password. Allowed for every
+    /// user, including root — this is how root rotates its own password.
+    pub async fn change_password_self(
+        &self,
+        user_id: i64,
+        new_password: &str,
+    ) -> anyhow::Result<()> {
+        self.set_password(user_id, new_password).await
+    }
+
+    async fn set_password(&self, user_id: i64, new_password: &str) -> anyhow::Result<()> {
         if new_password.len() < 8 {
             anyhow::bail!("Password must be at least 8 characters");
         }

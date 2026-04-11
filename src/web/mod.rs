@@ -331,6 +331,12 @@ const SENSITIVE_PATHS: &[&str] = &[
     "/api/auth/change-password",
 ];
 
+/// Paths where only specific methods must be blocked on plain HTTP. Used
+/// for endpoints whose GET (listing) is harmless but whose mutating
+/// method would leak a secret in the response body — e.g. `POST /api/tokens`
+/// returns the plaintext API token exactly once.
+const SENSITIVE_METHOD_PATHS: &[(&str, &str)] = &[("POST", "/api/tokens")];
+
 /// Authentication entry points. These are only blocked on plain HTTP when
 /// the auto_redirect_https toggle is on. When the toggle is off, users must
 /// be able to sign in and run initial setup over HTTP — the toggle is the
@@ -344,7 +350,11 @@ async fn sensitive_https_middleware(
 ) -> Response {
     if request.extensions().get::<IsHttps>().is_none() {
         let path = request.uri().path();
-        let always_block = SENSITIVE_PATHS.contains(&path);
+        let method = request.method().as_str();
+        let always_block = SENSITIVE_PATHS.contains(&path)
+            || SENSITIVE_METHOD_PATHS
+                .iter()
+                .any(|(m, p)| *m == method && *p == path);
         let auth_block = enforce_auth_https && AUTH_SENSITIVE_PATHS.contains(&path);
         if always_block || auth_block {
             return (
@@ -1441,7 +1451,11 @@ async fn api_change_password(
             .into_response());
     }
 
-    match state.auth.reset_password(user.id, &req.new_password).await {
+    match state
+        .auth
+        .change_password_self(user.id, &req.new_password)
+        .await
+    {
         Ok(()) => {
             // Clear the password-rotation flag if set. Best-effort: swallow
             // save errors since the password change itself succeeded.
@@ -3089,6 +3103,38 @@ mod sensitive_https_middleware_tests {
             .unwrap();
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn blocks_http_post_to_tokens_but_allows_get() {
+        // POST /api/tokens reveals the plaintext secret exactly once, so
+        // it must be blocked on HTTP regardless of the toggle. GET is a
+        // plain listing and stays reachable.
+        let app = Router::new()
+            .route(
+                "/api/tokens",
+                get(|| async { StatusCode::OK }).post(|| async { StatusCode::OK }),
+            )
+            .layer(axum::middleware::from_fn_with_state(
+                false,
+                sensitive_https_middleware,
+            ));
+
+        let post = Request::builder()
+            .method("POST")
+            .uri("/api/tokens")
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.clone().oneshot(post).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+
+        let list = Request::builder()
+            .method("GET")
+            .uri("/api/tokens")
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(list).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
     }
 
     #[tokio::test]

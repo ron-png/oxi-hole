@@ -1604,6 +1604,63 @@
             pointer-events: none !important;
         }
 
+        /* Full-screen blocking overlay shown after a restart-triggering
+           setting change. The user cannot dismiss it — they must reload. */
+        #reloadRequiredOverlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.82);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 100000;
+            backdrop-filter: blur(4px);
+            -webkit-backdrop-filter: blur(4px);
+            padding: 24px;
+        }
+        .reload-required-box {
+            background: var(--bg-subtle);
+            color: var(--text-primary);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 36px 40px;
+            max-width: 560px;
+            width: 100%;
+            text-align: center;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
+        }
+        .reload-required-title {
+            font-size: 24px;
+            font-weight: var(--weight-bold);
+            color: var(--color-orange);
+            margin-bottom: 16px;
+        }
+        .reload-required-body {
+            color: var(--text-secondary);
+            font-size: 14px;
+            line-height: 1.7;
+            margin-bottom: 24px;
+            text-align: left;
+        }
+        .reload-required-body p + p {
+            margin-top: 12px;
+        }
+        .reload-required-body kbd {
+            display: inline-block;
+            padding: 2px 7px;
+            margin: 0 2px;
+            background: var(--border-light);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            font-family: var(--font-mono);
+            font-size: 12px;
+            color: var(--text-primary);
+        }
+        .reload-required-box .btn {
+            font-size: 15px;
+            padding: 10px 24px;
+        }
+
         .cert-tabs { display: flex; gap: 0; border-bottom: 1px solid var(--border); margin-bottom: 16px; }
         .cert-tab { padding: 8px 16px; cursor: pointer; border: none; background: none; color: var(--text-muted); font-size: 13px; border-bottom: 2px solid transparent; }
         .cert-tab.active { color: var(--text); border-bottom-color: var(--accent); }
@@ -1972,7 +2029,7 @@
             <span class="security-banner__icon">⚠</span>
             <div class="security-banner__body">
                 <strong>You're connected over plain HTTP.</strong>
-                Sensitive settings (certificates, ACME tokens, password changes) are disabled.
+                Sensitive settings (certificates, ACME tokens, API tokens, password changes) are disabled.
             </div>
             <a id="httpWarningSwitchBtn" class="security-banner__action" href="#">Switch to HTTPS →</a>
         </div>
@@ -2318,7 +2375,7 @@
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
                     <span style="font-size: 13px; color: var(--text-muted);">Personal access tokens for API
                         authentication</span>
-                    <button type="button" class="btn btn-accent btn-sm" onclick="showCreateTokenModal()">Create Token</button>
+                    <button type="button" class="btn btn-accent btn-sm" data-requires-https="true" onclick="showCreateTokenModal()">Create Token</button>
                 </div>
                 <table>
                     <thead>
@@ -4429,14 +4486,55 @@
                 serverNetworkState.auto_redirect_https = data.auto_redirect_https ?? enabled;
                 refreshSecurityStatus();
                 // Toggling this setting restarts the web server and changes
-                // whether HTTP is redirected. Reload so the browser picks
-                // up the new state (redirect, banner, locked sections).
-                setTimeout(() => window.location.reload(), 800);
+                // whether HTTP is redirected. The page MUST be reloaded
+                // for the new state to take effect — force the user via
+                // a blocking overlay instead of silently reloading.
+                showReloadRequiredModal();
             } catch (e) {
                 console.error(e);
                 if (toggle) toggle.checked = !enabled;
                 if (toggle) toggle.disabled = false;
             }
+        }
+
+        function showReloadRequiredModal() {
+            if (document.getElementById('reloadRequiredOverlay')) return;
+            const overlay = document.createElement('div');
+            overlay.id = 'reloadRequiredOverlay';
+            overlay.setAttribute('role', 'alertdialog');
+            overlay.setAttribute('aria-modal', 'true');
+            overlay.innerHTML = `
+                <div class="reload-required-box">
+                    <div class="reload-required-title">⚠ Reload required</div>
+                    <div class="reload-required-body">
+                        <p>
+                            The HTTPS redirect setting has been changed and the
+                            web server has been restarted. You <strong>must
+                            reload this page</strong> for the new behaviour to
+                            take effect.
+                        </p>
+                        <p>
+                            If the page looks broken or keeps sending you to the
+                            wrong URL after the reload, your browser is probably
+                            serving a cached copy. Force a cache-bypass reload:
+                            <br>
+                            <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>R</kbd>
+                            on Windows/Linux, or
+                            <kbd>⌘</kbd>+<kbd>Shift</kbd>+<kbd>R</kbd> on macOS.
+                            If it still looks wrong, clear your browser cache
+                            for this site manually.
+                        </p>
+                    </div>
+                    <button type="button" class="btn btn-accent" id="reloadRequiredBtn">Reload now</button>
+                </div>
+            `;
+            // Block every key and scroll event outside the dialog while
+            // the overlay is up — the only valid action is "reload".
+            document.body.appendChild(overlay);
+            document.body.style.overflow = 'hidden';
+            document.getElementById('reloadRequiredBtn').addEventListener('click', () => {
+                window.location.reload();
+            });
         }
 
         async function toggleTrustForwardedProto(enabled) {
