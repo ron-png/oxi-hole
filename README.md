@@ -202,6 +202,29 @@ Open the dashboard at **http://<host>:9853** or **https://<host>:9854** (HTTPS u
 
 **Conflict with port 53**: if the host already runs a DNS resolver (e.g. `systemd-resolved`), the `-p 53:53` bindings will fail. Either disable the host resolver, change `dns.listen` on the host side by remapping `-p OTHER_PORT:53/udp` and `-p OTHER_PORT:53/tcp`, or use `--network host` so the container shares the host's network namespace. **Don't change `dns.listen` from inside the dashboard in a container** — see [What works differently in a container](#what-works-differently-in-a-container) below.
 
+**Rootless Podman on Linux**: rootless Podman runs as your user, so its port-forwarding proxy can't bind to ports below 1024 by default. The recommended `podman run` command will fail with `permission denied` on ports 53, 443, and 853 — the kernel reserves them for root. There are two workable fixes:
+
+- **Lower the unprivileged-port floor** (the upstream-recommended path):
+  ```sh
+  echo 'net.ipv4.ip_unprivileged_port_start=53' | sudo tee /etc/sysctl.d/99-oxi-dns.conf
+  sudo sysctl --system
+  ```
+  This opens ports 53–1023 to every unprivileged user on the host, which covers 53, 443, and 853 in one shot. On a single-user / personal machine that's fine; on a shared multi-user server it's a small extra risk to weigh.
+- **Run rootful Podman** with `sudo podman run …`. You lose rootless user-namespace isolation, and the container/volume/image cache live in the system store (`/var/lib/containers`) instead of `~/.local/share/containers` — `podman ps` and `sudo podman ps` show *different* containers, which surprises most people once.
+
+If you only want to kick the tyres without changing any sysctls, publish DNS on a high port instead — but **do not pick `5353`**: that's the mDNS port, and `avahi-daemon` already binds it on virtually every Linux desktop install (it's how `.local` hostname resolution and printer/Chromecast discovery work). `5300` is the conventional "DNS but unprivileged" port and is almost always free:
+```sh
+podman run -d --name oxi-dns \
+  -p 5300:53/udp -p 5300:53/tcp \
+  -p 9853:9853 -p 9854:9854 \
+  -v oxi-dns-data:/etc/oxi-dns \
+  --restart unless-stopped \
+  ghcr.io/ron-png/oxi-dns:latest
+```
+Test with `dig @127.0.0.1 -p 5300 example.com`. This is fine for verifying the dashboard but not useful for serving real LAN clients, since most consumer devices have no way to query DNS on a non-default port. Production use needs port 53, which means one of the two fixes above.
+
+**Podman on macOS**: Podman runs inside a Linux VM on macOS, so port-forwarding goes through `gvproxy` and bind errors come from the macOS side, not from inside the container. `--network host` does *not* help on macOS — it shares the VM's network namespace, not your Mac's. If a port-bind fails, look at what's running on your Mac with `sudo lsof -iUDP:53 -iTCP:53 -P -n`. Common culprits are a stale `oxi-dns` container from a previous attempt (`podman rm -f oxi-dns`), a Homebrew DNS resolver (`brew services list`), or *System Settings → General → Sharing → Internet Sharing*.
+
 Docker Compose:
 
 ```yaml
