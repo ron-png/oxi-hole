@@ -2481,25 +2481,26 @@
                             </div>
                         </div>
                     </div>
-                    <div class="setting-row" style="margin-bottom: 16px;">
-                        <div class="setting-info">
-                            <h3>Auto-redirect HTTP &rarr; HTTPS</h3>
-                            <p>When enabled, all plain HTTP requests are redirected to HTTPS. Requires HTTPS to be configured.</p>
+                    <div class="network-field">
+                        <label>Web Dashboard (HTTPS)</label>
+                        <div class="network-input-stack">
+                            <div class="network-port-grid">
+                                <div class="network-port-card">
+                                    <div class="network-port-label">IPv4 Port</div>
+                                    <input type="number" id="net-web-https-ipv4-port" placeholder="9854" min="1" max="65535" inputmode="numeric" onbeforeinput="preventInvalidPortInput(event)" oninput="handleNetworkPortInput(this)">
+                                    <div class="listen-target" id="net-web-https-ipv4-target"></div>
+                                </div>
+                                <div class="network-port-card">
+                                    <div class="network-port-label">IPv6 Port</div>
+                                    <input type="number" id="net-web-https-ipv6-port" placeholder="9854" min="1" max="65535" inputmode="numeric" onbeforeinput="preventInvalidPortInput(event)" oninput="handleNetworkPortInput(this)">
+                                    <div class="listen-target" id="net-web-https-ipv6-target"></div>
+                                </div>
+                            </div>
+                            <div id="https-save-row" style="display:none; margin-top:10px; align-items:center; gap:10px; flex-wrap:wrap;">
+                                <button id="https-save-btn" class="btn btn-sm btn-accent" onclick="saveHttpsSettings()">Save HTTPS Port</button>
+                                <span id="https-save-status" style="font-size:12px; color:var(--text-muted);"></span>
+                            </div>
                         </div>
-                        <label class="toggle-switch">
-                            <input type="checkbox" id="toggle-auto-redirect-https" onchange="toggleAutoRedirectHttps(this.checked)">
-                            <span class="toggle-slider"></span>
-                        </label>
-                    </div>
-                    <div class="setting-row" style="margin-bottom: 16px;">
-                        <div class="setting-info">
-                            <h3>Trust X-Forwarded-Proto header</h3>
-                            <p>&#9888; Only enable if oxi-dns is reachable exclusively through a trusted TLS-terminating reverse proxy. Attackers can spoof this header if oxi-dns is directly reachable.</p>
-                        </div>
-                        <label class="toggle-switch">
-                            <input type="checkbox" id="toggle-trust-forwarded-proto" onchange="toggleTrustForwardedProto(this.checked)">
-                            <span class="toggle-slider"></span>
-                        </label>
                     </div>
                     <div class="network-field">
                         <label>DNS-over-TLS</label>
@@ -2578,6 +2579,26 @@
                             <button type="button" class="reconfig-btn-copy" id="reconfigCopyBtn" onclick="copyReconfigCmd()">Copy</button>
                         </div>
                     </div>
+                </div>
+                <div class="setting-row" style="margin-bottom: 16px;">
+                    <div class="setting-info">
+                        <h3>Auto-redirect HTTP &rarr; HTTPS</h3>
+                        <p>When enabled, all plain HTTP requests are redirected to HTTPS. Requires HTTPS to be configured.</p>
+                    </div>
+                    <label class="toggle-switch">
+                        <input type="checkbox" id="toggle-auto-redirect-https" onchange="toggleAutoRedirectHttps(this.checked)">
+                        <span class="toggle-slider"></span>
+                    </label>
+                </div>
+                <div class="setting-row" style="margin-bottom: 16px;">
+                    <div class="setting-info">
+                        <h3>Trust X-Forwarded-Proto header</h3>
+                        <p>&#9888; Only enable if oxi-dns is reachable exclusively through a trusted TLS-terminating reverse proxy. Attackers can spoof this header if oxi-dns is directly reachable.</p>
+                    </div>
+                    <label class="toggle-switch">
+                        <input type="checkbox" id="toggle-trust-forwarded-proto" onchange="toggleTrustForwardedProto(this.checked)">
+                        <span class="toggle-slider"></span>
+                    </label>
                 </div>
                 <div class="setting-row">
                     <div class="setting-info">
@@ -4106,14 +4127,15 @@
         let networkInputsInitialized = false;
         let bannerDismissed = false;
         let dismissedNetworkSignature = '';
-        // HTTPS for the web dashboard is always on (default port 9854,
-        // configured via the web.https_listen field in the config file).
-        // It intentionally has no UI toggle — the dashboard's sensitive
-        // flows (cert upload, token creation, password changes) require
-        // HTTPS, so turning it off would brick those features.
+        // HTTPS for the web dashboard is always on — there's no toggle,
+        // only port editing. The ports are saved via a dedicated POST to
+        // /api/system/network (not through the privileged --reconfigure
+        // flow), so the entry is tagged `proto: 'https'` and the
+        // reconfigure / validation helpers skip it.
         const NETWORK_LISTENERS = [
             { prefix: 'net-dns', key: 'dns.listen', serverKey: 'dns_listen', label: 'DNS Server', required: true, defaultPort: '53' },
             { prefix: 'net-web', key: 'web.listen', serverKey: 'web_listen', label: 'Web Dashboard (HTTP)', required: true, defaultPort: '9853' },
+            { prefix: 'net-web-https', key: 'web.https_listen', serverKey: 'https_listen', label: 'Web Dashboard (HTTPS)', required: true, proto: 'https', defaultPort: '9854' },
             { prefix: 'net-dot', key: 'dns.dot_listen', serverKey: 'dot_listen', label: 'DNS-over-TLS', required: false, toggleId: 'toggle-dot', proto: 'dot', defaultPort: '853' },
             { prefix: 'net-doh', key: 'dns.doh_listen', serverKey: 'doh_listen', label: 'DNS-over-HTTPS', required: false, toggleId: 'toggle-doh', proto: 'doh', defaultPort: '443' },
             { prefix: 'net-doq', key: 'dns.doq_listen', serverKey: 'doq_listen', label: 'DNS-over-QUIC', required: false, toggleId: 'toggle-doq', proto: 'doq', defaultPort: '853' },
@@ -4492,6 +4514,11 @@
         function getNetworkReconfigureChanges() {
             const changes = [];
             for (const listener of NETWORK_LISTENERS) {
+                // HTTPS port is saved via POST /api/system/network, not
+                // via the privileged --reconfigure CLI — it doesn't
+                // belong in the reconfigure banner. Validation and save
+                // happen in saveHttpsSettings() / checkHttpsSaveButton().
+                if (listener.proto === 'https') continue;
                 const serverValues = getServerListenValues(listener);
                 const desiredValues = listener.toggleId && !document.getElementById(listener.toggleId).checked
                     ? []
@@ -4530,6 +4557,88 @@
             }
 
             checkNetworkChanges();
+        }
+
+        // The HTTPS web dashboard has no enable/disable toggle any more
+        // (it's always on), so these two helpers just drive the "Save
+        // HTTPS Port" button row: it appears when the current input
+        // values differ from what's on the server, and clicking it
+        // POSTs the new ports through /api/system/network.
+        function checkHttpsSaveButton() {
+            const httpsListener = NETWORK_LISTENERS.find(l => l.proto === 'https');
+            if (!httpsListener) return;
+
+            const saveRow = document.getElementById('https-save-row');
+            const saveBtn = document.getElementById('https-save-btn');
+            if (!saveRow || !saveBtn) return;
+
+            const desiredValues = buildDesiredListenValues(httpsListener);
+            const serverValues = getServerListenValues(httpsListener);
+            const hasPendingChanges = !arraysEqual(desiredValues, serverValues);
+
+            if (hasPendingChanges) {
+                saveRow.style.display = 'flex';
+                const statusEl = document.getElementById('https-save-status');
+                if (statusEl && statusEl.textContent === 'Saved') {
+                    statusEl.textContent = '';
+                }
+            } else {
+                saveRow.style.display = 'none';
+            }
+        }
+
+        async function saveHttpsSettings() {
+            const httpsListener = NETWORK_LISTENERS.find(l => l.proto === 'https');
+            if (!httpsListener) return;
+
+            const saveBtn = document.getElementById('https-save-btn');
+            const statusEl = document.getElementById('https-save-status');
+
+            // Validate both ports before sending.
+            const ipv4State = getFamilyEditState(httpsListener.prefix, 'ipv4');
+            const ipv6State = getFamilyEditState(httpsListener.prefix, 'ipv6');
+            const activeStates = [ipv4State, ipv6State].filter(s => s.kind !== 'disabled');
+
+            for (const [family, state] of [['IPv4', ipv4State], ['IPv6', ipv6State]]) {
+                if (state.kind === 'ambiguous-edit') {
+                    if (statusEl) statusEl.textContent = `${family} uses an unbracketed IPv6 address. Bracket it first.`;
+                    return;
+                }
+                if (state.kind === 'port' && !isValidPort(state.port)) {
+                    if (statusEl) statusEl.textContent = `${family} port must be between 1 and 65535.`;
+                    return;
+                }
+            }
+
+            if (activeStates.length === 0) {
+                if (statusEl) statusEl.textContent = 'Requires an IPv4 or IPv6 port.';
+                return;
+            }
+
+            const desiredValues = buildDesiredListenValues(httpsListener);
+
+            if (saveBtn) saveBtn.disabled = true;
+            if (statusEl) statusEl.textContent = 'Saving\u2026';
+
+            try {
+                const res = await fetch('/api/system/network', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ https_listen: desiredValues })
+                });
+                if (!res.ok) throw new Error('Failed to save HTTPS settings');
+                const data = await res.json();
+                serverNetworkState.https_listen = data.https_listen ?? desiredValues;
+                if (statusEl) statusEl.textContent = 'Saved';
+                syncNetworkInputsFromServer();
+                checkHttpsSaveButton();
+                refreshSecurityStatus();
+            } catch (e) {
+                console.error(e);
+                if (statusEl) statusEl.textContent = 'Save failed. Try again.';
+            } finally {
+                if (saveBtn) saveBtn.disabled = false;
+            }
         }
 
         function toggleAutoRedirectHttps(enabled) {
@@ -4664,6 +4773,9 @@
 
         function getNetworkValidationError() {
             for (const listener of NETWORK_LISTENERS) {
+                // HTTPS is validated by its own save button row — stays
+                // out of the top-level reconfigure banner.
+                if (listener.proto === 'https') continue;
                 if (listener.toggleId && !document.getElementById(listener.toggleId).checked) {
                     continue;
                 }
@@ -4695,6 +4807,7 @@
 
         function checkNetworkChanges() {
             renderNetworkTargets();
+            checkHttpsSaveButton();
             const changes = getNetworkReconfigureChanges();
             const banner = document.getElementById('reconfigBanner');
             const validationError = getNetworkValidationError();
