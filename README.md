@@ -758,11 +758,13 @@ Please note that this list is not a promise, rather thoughts I might change my m
 
 ### Goals for Version 1:
 - Make the UI more user friendly (feature)
-- Verify DNS over TLS, HTTPS and QUIC work (feature)
+- Verify DNS over QUIC work (feature)
 - When enabling DoH, the user should be able to define the https request path (feature)
+  - make sure that the path is not used by any other service on the same server.
 - if the user wants a different subdomain for DoH, DoT and DoQ, the user should be able to define it in the UI (feature)
-  - this should include the ability that the server automatically creates the needed certificates for the subdomain (if not already present by wildcard certificate).
-  - if the subdomain doesn't exist, the server should create a DNS A record for the subdomain pointing to the server's IP address.
+  - this should include the ability that the server automatically creates the needed certificates for the subdomain (if not already covered by wildcard certificate).
+  - if the subdomain doesn't exist in the DNS zone, the server should create a DNS A (and if enabled AAAA) record for the subdomain pointing to the server's IP address.
+    - this is only possible if the user has provided an API token for his authoritative DNS provider.
 - in addition, harden DoH, DoT and DoQ (feature) (pathing attacks, etc)
 - Verify that changing Settings in the UI (Like Port or listen address) works with the generated terminal commands. (ipv4 yes, ipv6 has to be fixed)
 - add a warning for cloudflare users, that the proxy should be disabled for oxi-dns to work properly. 
