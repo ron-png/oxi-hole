@@ -770,6 +770,13 @@ fn parse_optional_listen_value(
     }
 }
 
+// Note: Integration tests for api_update_network's transition behavior
+// (400 on auto_redirect_https=true without https_listen; password_change_recommended
+// set on false→true transition) are deferred to manual verification in Task 15.
+// Building an AppState fixture would require constructing AuthService, BlockList,
+// UpstreamForwarder, PersistentStats, and many other components — too much
+// surface area for two simple behavioral checks. The behaviors are exercised
+// in the end-to-end manual verification (Task 15).
 async fn api_update_network(
     State(state): State<AppState>,
     axum::Extension(user): axum::Extension<AuthenticatedUser>,
