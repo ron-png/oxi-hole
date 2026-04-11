@@ -1586,6 +1586,7 @@ dependencies = [
  "tokio-rusqlite",
  "tokio-rustls",
  "toml",
+ "tower",
  "tower-http",
  "tower-service",
  "tracing",
