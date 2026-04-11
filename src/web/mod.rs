@@ -328,6 +328,7 @@ pub async fn run_web_server(
     listen: &[String],
     https_listen: Option<&[String]>,
     tls_config: Option<Arc<rustls::ServerConfig>>,
+    auto_redirect_https: bool,
     state: AppState,
 ) -> anyhow::Result<()> {
     let auth_for_middleware = state.auth.clone();
@@ -545,9 +546,13 @@ pub async fn run_web_server(
             }));
         }
 
-        // HTTP becomes redirect-only when HTTPS is active.
+    }
+
+    if is_https_active && auto_redirect_https {
+        // HTTP becomes redirect-only when HTTPS is active and auto_redirect_https is enabled.
         // Extract just the port from the HTTPS address — the redirect handler
         // uses the Host header from the request for the hostname.
+        let https_addrs = https_listen.unwrap();
         let https_port = https_addrs
             .first()
             .and_then(|addr| addr.rsplit_once(':').map(|(_, p)| p.to_string()))
