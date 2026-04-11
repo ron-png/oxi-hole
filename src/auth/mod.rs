@@ -233,7 +233,9 @@ impl AuthService {
             .await?
             .ok_or_else(|| anyhow::anyhow!("User not found"))?;
         if target.is_root {
-            anyhow::bail!("Cannot reset the root user's password; the root user must change it themselves");
+            anyhow::bail!(
+                "Cannot reset the root user's password; the root user must change it themselves"
+            );
         }
         self.set_password(user_id, new_password).await
     }

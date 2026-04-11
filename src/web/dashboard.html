@@ -1560,6 +1560,24 @@
         .security-banner__action:hover {
             opacity: 0.85;
         }
+        .security-banner__dismiss {
+            padding: 6px 12px;
+            background: transparent;
+            color: var(--text-secondary);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            font-weight: 500;
+            font-size: 13px;
+            white-space: nowrap;
+            flex-shrink: 0;
+            cursor: pointer;
+            font-family: inherit;
+            margin-left: 8px;
+        }
+        .security-banner__dismiss:hover {
+            color: var(--text-primary);
+            border-color: var(--text-muted);
+        }
 
         .sensitive-warning {
             padding: 24px;
@@ -2041,6 +2059,7 @@
                 Your account password may have been transmitted in plaintext before HTTPS was enabled. We recommend changing it now.
             </div>
             <a id="passwordRotationBtn" class="security-banner__action" href="#">Change password →</a>
+            <button type="button" id="passwordRotationDismissBtn" class="security-banner__dismiss">Not now</button>
         </div>
         <!-- Auto-update status notification -->
         <div id="updateNotification"
@@ -5538,6 +5557,12 @@
         })();
 
         // ---- Password rotation banner ----
+        // "Not now" snoozes the banner for the current browser session.
+        // The backend's password_change_recommended flag is only cleared
+        // when the user actually changes their password — next reload /
+        // new tab / new login will surface the reminder again.
+        const PASSWORD_ROTATION_DISMISS_KEY = 'oxidns.passwordRotationDismissed';
+
         async function refreshSecurityStatus() {
             try {
                 const res = await fetch('/api/system/security-status', { credentials: 'include' });
@@ -5545,9 +5570,14 @@
                 const status = await res.json();
                 const banner = document.getElementById('passwordRotationBanner');
                 if (!banner) return;
+                const dismissed = sessionStorage.getItem(PASSWORD_ROTATION_DISMISS_KEY) === '1';
                 // Only show on HTTPS — on HTTP, the HTTP banner takes precedence
                 // and the user can't actually change their password anyway
-                if (status.password_change_recommended && window.location.protocol === 'https:') {
+                if (
+                    status.password_change_recommended &&
+                    window.location.protocol === 'https:' &&
+                    !dismissed
+                ) {
                     banner.style.display = 'flex';
                 } else {
                     banner.style.display = 'none';
@@ -5559,11 +5589,20 @@
 
         (function setupPasswordRotationBanner() {
             const btn = document.getElementById('passwordRotationBtn');
-            if (!btn) return;
-            btn.addEventListener('click', (e) => {
-                e.preventDefault();
-                showChangePasswordModal();
-            });
+            if (btn) {
+                btn.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    showChangePasswordModal();
+                });
+            }
+            const dismissBtn = document.getElementById('passwordRotationDismissBtn');
+            if (dismissBtn) {
+                dismissBtn.addEventListener('click', () => {
+                    sessionStorage.setItem(PASSWORD_ROTATION_DISMISS_KEY, '1');
+                    const banner = document.getElementById('passwordRotationBanner');
+                    if (banner) banner.style.display = 'none';
+                });
+            }
         })();
 
         // Call on init
