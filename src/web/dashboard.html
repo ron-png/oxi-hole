@@ -1514,6 +1514,53 @@
 
         /* .channel-select styling now handled by global select rules */
 
+        .security-banner {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 12px 16px;
+            margin: 0 0 16px 0;
+            border-radius: 8px;
+            font-size: 14px;
+            border: 1px solid;
+        }
+        .security-banner--danger {
+            background: rgba(239, 68, 68, 0.08);
+            border-color: rgba(239, 68, 68, 0.3);
+            color: #f87171;
+        }
+        .security-banner--warning {
+            background: rgba(234, 179, 8, 0.06);
+            border-color: rgba(234, 179, 8, 0.2);
+            color: #eab308;
+        }
+        .security-banner__icon {
+            font-size: 18px;
+            flex-shrink: 0;
+        }
+        .security-banner__body {
+            flex: 1;
+            color: var(--text-secondary);
+        }
+        .security-banner__body strong {
+            margin-right: 4px;
+            color: #f87171;
+        }
+        .security-banner__action {
+            padding: 6px 14px;
+            background: #f87171;
+            color: #0a0a0c;
+            text-decoration: none;
+            border-radius: 6px;
+            font-weight: 600;
+            font-size: 13px;
+            white-space: nowrap;
+            flex-shrink: 0;
+        }
+        .security-banner__action:hover {
+            opacity: 0.85;
+        }
+
         .cert-tabs { display: flex; gap: 0; border-bottom: 1px solid var(--border); margin-bottom: 16px; }
         .cert-tab { padding: 8px 16px; cursor: pointer; border: none; background: none; color: var(--text-muted); font-size: 13px; border-bottom: 2px solid transparent; }
         .cert-tab.active { color: var(--text); border-bottom-color: var(--accent); }
@@ -1877,6 +1924,15 @@
     </div>
 
     <div class="container">
+        <!-- HTTP security warning banner -->
+        <div id="httpWarningBanner" class="security-banner security-banner--danger" style="display:none;">
+            <span class="security-banner__icon">⚠</span>
+            <div class="security-banner__body">
+                <strong>You're connected over plain HTTP.</strong>
+                Sensitive settings (certificates, ACME tokens, password changes) are disabled.
+            </div>
+            <a id="httpWarningSwitchBtn" class="security-banner__action" href="#">Switch to HTTPS →</a>
+        </div>
         <!-- Auto-update status notification -->
         <div id="updateNotification"
             style="display: none; padding: 12px 16px; border-radius: 8px; margin-bottom: 16px; position: relative;">
@@ -5107,6 +5163,38 @@
                 await refreshCacheStats();
             } catch (e) { console.error('Failed to flush cache', e); }
         }
+
+        // ---- HTTP warning banner ----
+        (function setupHttpBanner() {
+            const banner = document.getElementById('httpWarningBanner');
+            if (!banner) return;
+            if (window.location.protocol !== 'http:') return;
+            banner.style.display = 'flex';
+
+            const btn = document.getElementById('httpWarningSwitchBtn');
+            if (!btn) return;
+
+            fetch('/api/system/network', { credentials: 'include' })
+                .then(r => r.ok ? r.json() : null)
+                .then(data => {
+                    if (!data) return;
+                    const httpsAddrs = data.https_listen || [];
+                    if (httpsAddrs.length === 0) {
+                        btn.style.display = 'none';
+                        return;
+                    }
+                    // Handle "0.0.0.0:9854" or "[::]:9854" or bare "9854"
+                    const first = httpsAddrs[0];
+                    let port = '9854';
+                    const lastColon = first.lastIndexOf(':');
+                    if (lastColon !== -1 && lastColon < first.length - 1) {
+                        port = first.slice(lastColon + 1);
+                    }
+                    const url = `https://${window.location.hostname}:${port}${window.location.pathname}${window.location.search}`;
+                    btn.href = url;
+                })
+                .catch(() => { btn.style.display = 'none'; });
+        })();
 
         // ---- Auto-refresh ----
         // Initialize: fetch user first, then load data
