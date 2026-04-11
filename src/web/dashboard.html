@@ -2389,6 +2389,10 @@
                                         <div class="listen-target" id="net-web-https-ipv6-target"></div>
                                     </div>
                                 </div>
+                                <div id="https-save-row" style="display:none; margin-top:10px; align-items:center; gap:10px; flex-wrap:wrap;">
+                                    <button id="https-save-btn" class="btn btn-sm btn-accent" onclick="saveHttpsSettings()">Save HTTPS Port</button>
+                                    <span id="https-save-status" style="font-size:12px; color:var(--text-muted);"></span>
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -4310,6 +4314,8 @@
         function getNetworkReconfigureChanges() {
             const changes = [];
             for (const listener of NETWORK_LISTENERS) {
+                // HTTPS port is saved via POST /api/system/network, not via --reconfigure
+                if (listener.proto === 'https') continue;
                 const serverValues = getServerListenValues(listener);
                 const desiredValues = listener.toggleId && !document.getElementById(listener.toggleId).checked
                     ? []
@@ -4384,8 +4390,91 @@
             }
         }
 
+        function checkHttpsSaveButton() {
+            const httpsListener = NETWORK_LISTENERS.find(l => l.proto === 'https');
+            if (!httpsListener) return;
+
+            const saveRow = document.getElementById('https-save-row');
+            const saveBtn = document.getElementById('https-save-btn');
+            if (!saveRow || !saveBtn) return;
+
+            const toggleChecked = document.getElementById(httpsListener.toggleId)?.checked ?? false;
+            const desiredValues = toggleChecked ? buildDesiredListenValues(httpsListener) : [];
+            const serverValues = getServerListenValues(httpsListener);
+            const hasPendingChanges = !arraysEqual(desiredValues, serverValues);
+
+            if (hasPendingChanges) {
+                saveRow.style.display = 'flex';
+                const statusEl = document.getElementById('https-save-status');
+                if (statusEl && statusEl.textContent === 'Saved') {
+                    statusEl.textContent = '';
+                }
+            } else {
+                saveRow.style.display = 'none';
+            }
+        }
+
+        async function saveHttpsSettings() {
+            const httpsListener = NETWORK_LISTENERS.find(l => l.proto === 'https');
+            if (!httpsListener) return;
+
+            const saveBtn = document.getElementById('https-save-btn');
+            const statusEl = document.getElementById('https-save-status');
+            const toggleChecked = document.getElementById(httpsListener.toggleId)?.checked ?? false;
+
+            // Validate ports before saving
+            if (toggleChecked) {
+                const ipv4State = getFamilyEditState(httpsListener.prefix, 'ipv4');
+                const ipv6State = getFamilyEditState(httpsListener.prefix, 'ipv6');
+                const activeStates = [ipv4State, ipv6State].filter(s => s.kind !== 'disabled');
+
+                for (const [family, state] of [['IPv4', ipv4State], ['IPv6', ipv6State]]) {
+                    if (state.kind === 'ambiguous-edit') {
+                        if (statusEl) statusEl.textContent = `${family} uses an unbracketed IPv6 address. Bracket it first.`;
+                        return;
+                    }
+                    if (state.kind === 'port' && !isValidPort(state.port)) {
+                        if (statusEl) statusEl.textContent = `${family} port must be between 1 and 65535.`;
+                        return;
+                    }
+                }
+
+                if (activeStates.length === 0) {
+                    if (statusEl) statusEl.textContent = 'Requires an IPv4 or IPv6 port when enabled.';
+                    return;
+                }
+            }
+
+            const desiredValues = toggleChecked ? buildDesiredListenValues(httpsListener) : [];
+
+            if (saveBtn) saveBtn.disabled = true;
+            if (statusEl) statusEl.textContent = 'Saving\u2026';
+
+            try {
+                const res = await fetch('/api/system/network', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ https_listen: desiredValues })
+                });
+                if (!res.ok) throw new Error('Failed to save HTTPS settings');
+                const data = await res.json();
+                serverNetworkState.https_listen = data.https_listen ?? desiredValues;
+                if (statusEl) statusEl.textContent = 'Saved';
+                syncNetworkInputsFromServer();
+                checkHttpsSaveButton();
+                refreshSecurityStatus();
+            } catch (e) {
+                console.error(e);
+                if (statusEl) statusEl.textContent = 'Save failed. Try again.';
+            } finally {
+                if (saveBtn) saveBtn.disabled = false;
+            }
+        }
+
         function getNetworkValidationError() {
             for (const listener of NETWORK_LISTENERS) {
+                // HTTPS validation is handled separately in saveHttpsSettings()
+                if (listener.proto === 'https') continue;
                 if (listener.toggleId && !document.getElementById(listener.toggleId).checked) {
                     continue;
                 }
@@ -4417,6 +4506,7 @@
 
         function checkNetworkChanges() {
             renderNetworkTargets();
+            checkHttpsSaveButton();
             const changes = getNetworkReconfigureChanges();
             const banner = document.getElementById('reconfigBanner');
             const validationError = getNetworkValidationError();
