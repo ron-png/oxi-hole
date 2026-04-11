@@ -227,7 +227,7 @@ Most settings are configurable at runtime through the web dashboard. The full se
 | Section | Key settings |
 |---------|-------------|
 | `[dns]` | `listen`, `dot_listen`, `doh_listen`, `doq_listen`, `upstreams`, `timeout_ms`, `cache_enabled` |
-| `[web]` | `listen`, `https_listen` (optional, enables HTTPS for dashboard) |
+| `[web]` | `listen`, `https_listen`, `auto_redirect_https`, `trust_forwarded_proto` (see [HTTPS & Reverse Proxy](#https--reverse-proxy)) |
 | `[blocking]` | `enabled`, `blocklists`, `custom_blocked`, `allowlist`, `blocking_mode`, `update_interval_minutes`, `enabled_features` |
 | `[tls]` | `cert_path`, `key_path` (auto-generates self-signed if omitted) |
 | `[system]` | `auto_update`, `ipv6_enabled`, `release_channel` |
@@ -246,6 +246,80 @@ sudo oxi-dns --reconfigure dns.listen=0.0.0.0:53 dns.dot_listen=0.0.0.0:853
 ```
 
 Handles systemd-resolved automatically when switching to/from port 53. The dashboard also generates these commands for you when you edit network settings.
+
+Note that `web.https_listen`, `web.auto_redirect_https`, and `web.trust_forwarded_proto` are **not** accepted by `--reconfigure` — they are web-editable via the Network tab (see below).
+
+## HTTPS & Reverse Proxy
+
+Oxi-DNS generates a self-signed certificate at startup if no cert is configured, so the dashboard is always reachable over HTTPS (default port `9854`). Uploading a real certificate or issuing one via ACME replaces the self-signed one.
+
+Sensitive endpoints — TLS cert upload, ACME provider tokens, login, setup, and password change — are **always blocked over plain HTTP**, regardless of configuration. The dashboard shows a warning banner and inline-replaces the affected forms when loaded over HTTP, with a one-click "Switch to HTTPS" button.
+
+### Configurable fields (Network tab)
+
+| Field | Default | Effect |
+|-------|---------|-------|
+| `web.https_listen` | `["0.0.0.0:9854", "[::]:9854"]` | HTTPS listener for the dashboard. Set to `null` to disable. Port is editable in the Network tab; the change rebinds on save. |
+| `web.auto_redirect_https` | `false` | When enabled, all HTTP requests get a 308 redirect to HTTPS. When disabled, HTTP still serves the dashboard for non-sensitive endpoints. |
+| `web.trust_forwarded_proto` | `false` | Opt-in for reverse-proxied deployments (see below). ⚠ Security-critical. |
+
+When `auto_redirect_https` transitions from off to on, the dashboard shows a one-time banner recommending a password rotation (since the password may have been transmitted in plaintext before HTTPS enforcement). The banner clears automatically after a successful password change.
+
+### Running behind a reverse proxy
+
+A common deployment pattern is TLS termination at a reverse proxy:
+
+```
+client ──HTTPS──▶ nginx/caddy/traefik ──HTTP──▶ oxi-dns
+```
+
+In this setup, oxi-dns sees only plain HTTP from the proxy, so by default its HTTP-gating middleware blocks sensitive endpoints — including login — and you'd be locked out of your own dashboard.
+
+The fix is the opt-in `web.trust_forwarded_proto` flag. When enabled, oxi-dns trusts the `X-Forwarded-Proto` header that every standard reverse proxy injects, treating `X-Forwarded-Proto: https` as equivalent to a direct HTTPS connection:
+
+```toml
+[web]
+listen = ["127.0.0.1:9853"]          # bound to loopback, only reachable via proxy
+https_listen = ["127.0.0.1:9854"]    # optional — proxy can forward to HTTPS too
+trust_forwarded_proto = true
+```
+
+**⚠ Only enable this flag if oxi-dns is *exclusively* reachable through a trusted reverse proxy.** If the HTTP listener is exposed to untrusted clients (e.g. bound to `0.0.0.0:9853` on an open network), an attacker can forge `X-Forwarded-Proto: https` and bypass every HTTPS-required check.
+
+The middleware reads the **last** value of `X-Forwarded-Proto` if multiple are present, which is the authoritative value appended by the nearest trusted hop — a spoofed first value from an attacker before the proxy sees the request is ignored.
+
+A warning is logged whenever `trust_forwarded_proto` transitions from disabled to enabled as an audit trail.
+
+### Example: nginx
+
+```nginx
+server {
+    listen 443 ssl http2;
+    server_name oxi-dns.example.com;
+
+    ssl_certificate     /etc/letsencrypt/live/oxi-dns.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/oxi-dns.example.com/privkey.pem;
+
+    location / {
+        proxy_pass http://127.0.0.1:9853;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto $scheme;   # nginx sets https
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+}
+```
+
+Pair with `trust_forwarded_proto = true` in oxi-dns and bind `web.listen = ["127.0.0.1:9853"]` so the HTTP listener is not reachable from outside the host.
+
+### Example: Caddy
+
+```caddy
+oxi-dns.example.com {
+    reverse_proxy 127.0.0.1:9853
+}
+```
+
+Caddy sets `X-Forwarded-Proto` automatically when using `reverse_proxy`.
 
 ## Uninstall
 
