@@ -200,7 +200,40 @@ Open the dashboard at **http://<host>:9853** or **https://<host>:9854** (HTTPS u
 
 **Conflict with port 443**: a lot of hosts already run a web server or reverse proxy on 443. If `docker run` fails with "address already in use" on 443, drop `-p 443:443/tcp`. You can keep DoT/DoQ on 853 even when DoH isn't published — and when you enable DoH later, it'll bind inside the container but won't be reachable from outside until you republish the port.
 
-**Conflict with port 53**: if the host already runs a DNS resolver (e.g. `systemd-resolved`), the `-p 53:53` bindings will fail. Either disable the host resolver, change `dns.listen` on the host side by remapping `-p OTHER_PORT:53/udp` and `-p OTHER_PORT:53/tcp`, or use `--network host` so the container shares the host's network namespace. **Don't change `dns.listen` from inside the dashboard in a container** — see [What works differently in a container](#what-works-differently-in-a-container) below.
+**Conflict with port 53**: if the host already runs a DNS resolver, the `-p 53:53` bindings will fail with `address already in use` (or `failed to bind host port 0.0.0.0:53/tcp`). On most modern Linux distros — Ubuntu, Debian 11+, Fedora, RHEL 9+, openSUSE — the culprit is **`systemd-resolved`**: it binds `127.0.0.53:53` as a stub resolver, and Docker's `0.0.0.0:53` bind overlaps with it because `0.0.0.0` covers every interface including the loopback alias. (`dnsmasq`, `unbound`, `BIND`, or another container can also be the cause; check with `sudo ss -lunp 'sport = :53'` to see which.)
+
+The cleanest fix on a `systemd-resolved` host is to disable just the **stub listener** while keeping `systemd-resolved` running for the host's own outgoing DNS. This is the same sequence the bare-metal install script uses (`src/reconfigure.rs`):
+
+```sh
+# 1. Tell resolved to stop binding 127.0.0.53:53
+sudo mkdir -p /etc/systemd/resolved.conf.d
+printf '[Resolve]\nDNSStubListener=no\n' \
+  | sudo tee /etc/systemd/resolved.conf.d/oxi-dns.conf
+
+# 2. Re-point /etc/resolv.conf away from the stub. Without this the host
+#    can't resolve names because /etc/resolv.conf currently points at
+#    127.0.0.53, which is about to disappear.
+sudo ln -sf /run/systemd/resolve/resolv.conf /etc/resolv.conf
+
+# 3. Restart resolved so the new setting takes effect
+sudo systemctl restart systemd-resolved
+
+# 4. Confirm port 53 is now free
+sudo ss -lunp 'sport = :53'
+sudo ss -ltnp 'sport = :53'   # both should be empty
+```
+
+To reverse it later (e.g. if you uninstall oxi-dns), undo all four steps:
+
+```sh
+sudo rm /etc/systemd/resolved.conf.d/oxi-dns.conf
+sudo ln -sf /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
+sudo systemctl restart systemd-resolved
+```
+
+**If you can't (or don't want to) disable the stub listener**, the alternatives are: bind oxi-dns's published port to a specific non-loopback host IP that doesn't overlap (`-p 192.168.1.10:53:53/udp`), publish DNS on a non-default host port like `-p 5300:53/udp -p 5300:53/tcp` (only useful for testing — most consumer devices can't query DNS on a non-standard port), or use `--network host` so the container shares the host's network namespace (Linux only — `--network host` is a no-op on Docker Desktop for Mac/Windows because the daemon runs inside a VM).
+
+**Don't change `dns.listen` from inside the dashboard in a container** — see [What works differently in a container](#what-works-differently-in-a-container) below.
 
 **Rootless Podman on Linux**: rootless Podman runs as your user, so its port-forwarding proxy can't bind to ports below 1024 by default. The recommended `podman run` command will fail with `permission denied` on ports 53, 443, and 853 — the kernel reserves them for root. There are two workable fixes:
 
