@@ -28,13 +28,15 @@ URL="https://raw.githubusercontent.com/ron-png/oxi-dns/main/scripts/install.sh";
 ```bash
 docker run -d --name oxi-dns \
   -p 53:53/udp -p 53:53/tcp \
+  -p 853:853/tcp -p 853:853/udp \
+  -p 443:443/tcp \
   -p 9853:9853 -p 9854:9854 \
   -v oxi-dns-data:/etc/oxi-dns \
   --restart unless-stopped \
   ghcr.io/ron-png/oxi-dns:latest
 ```
 
-Then open the dashboard at **http://<host>:9853** (or **https://<host>:9854** with the auto-generated self-signed cert) and point a device's DNS at the server's IP. That's it — ads and trackers are blocked network-wide. See [Installation](#installation) and [Configuration](#configuration) for details.
+Then open the dashboard at **http://<host>:9853** (or **https://<host>:9854** with the auto-generated self-signed cert) and point a device's DNS at the server's IP. That's it — ads and trackers are blocked network-wide. The encrypted-DNS ports (DoT 853, DoH 443, DoQ 853/udp) are pre-published so you can just toggle them on in the dashboard later — drop `-p 443:443/tcp` if you already run a web server on the host. See [Installation](#installation) and [Configuration](#configuration) for details.
 
 ## Why Oxi-DNS?
 
@@ -181,6 +183,9 @@ docker run -d \
   --restart unless-stopped \
   -p 53:53/udp \
   -p 53:53/tcp \
+  -p 853:853/tcp \
+  -p 853:853/udp \
+  -p 443:443/tcp \
   -p 9853:9853 \
   -p 9854:9854 \
   -v oxi-dns-data:/etc/oxi-dns \
@@ -191,9 +196,11 @@ The named volume `oxi-dns-data` persists `config.toml` along with the SQLite dat
 
 Open the dashboard at **http://<host>:9853** or **https://<host>:9854** (HTTPS uses a self-signed certificate by default).
 
-**Encrypted DNS** is off by default in the bundled config — add `-p 853:853/tcp` (DoT), `-p 443:443/tcp` (DoH), and/or `-p 853:853/udp` (DoQ) when you enable the corresponding listeners in `config.toml` or the Network tab of the dashboard.
+**Why all the ports up front?** A container's published ports are fixed at `docker run` time — there's no way to add them later from inside the container. To save you a recreate later, the recommended command pre-publishes every listener oxi-dns can bind: plain DNS (53), DoT (853/tcp), DoQ (853/udp), DoH (443), HTTP dashboard (9853), HTTPS dashboard (9854). The DoT/DoH/DoQ listeners are still **off in the config by default** — flip them on from the Network tab of the dashboard whenever you want, and the published ports will already be there. You can drop any `-p` line you don't need.
 
-**Conflict with port 53**: if the host already runs a DNS resolver (e.g. `systemd-resolved`), the `-p 53:53` bindings will fail. Either disable the host resolver, change `dns.listen` in `config.toml` to a different port, or use `--network host` so the container shares the host's network namespace.
+**Conflict with port 443**: a lot of hosts already run a web server or reverse proxy on 443. If `docker run` fails with "address already in use" on 443, drop `-p 443:443/tcp`. You can keep DoT/DoQ on 853 even when DoH isn't published — and when you enable DoH later, it'll bind inside the container but won't be reachable from outside until you republish the port.
+
+**Conflict with port 53**: if the host already runs a DNS resolver (e.g. `systemd-resolved`), the `-p 53:53` bindings will fail. Either disable the host resolver, change `dns.listen` on the host side by remapping `-p OTHER_PORT:53/udp` and `-p OTHER_PORT:53/tcp`, or use `--network host` so the container shares the host's network namespace. **Don't change `dns.listen` from inside the dashboard in a container** — see [What works differently in a container](#what-works-differently-in-a-container) below.
 
 Docker Compose:
 
@@ -206,12 +213,11 @@ services:
     ports:
       - "53:53/udp"
       - "53:53/tcp"
-      - "9853:9853"   # Web dashboard (HTTP)
-      - "9854:9854"   # Web dashboard (HTTPS, self-signed by default)
-      # Uncomment after enabling the matching listener in config.toml:
-      # - "853:853/tcp"   # DoT
-      # - "443:443/tcp"   # DoH
-      # - "853:853/udp"   # DoQ
+      - "853:853/tcp"   # DoT — listener is off by default; toggle on in dashboard
+      - "853:853/udp"   # DoQ — listener is off by default; toggle on in dashboard
+      - "443:443/tcp"   # DoH — listener is off by default; comment out if 443 is taken
+      - "9853:9853"     # Web dashboard (HTTP)
+      - "9854:9854"     # Web dashboard (HTTPS, self-signed by default)
     volumes:
       - oxi-dns-data:/etc/oxi-dns
 
@@ -221,7 +227,41 @@ volumes:
 
 The image ships with the project's default `config.toml` (Quad9 over DoT as upstreams, plain DNS on `:53`, dashboard on `:9853` HTTP / `:9854` HTTPS). On first start with an empty named volume, Docker copies that file into the volume so it persists across recreations — edit it via the dashboard, the API, or directly on the volume.
 
-> **Note on auto-update.** The in-process auto-updater is **disabled by default** and should stay off in containers — pull a new image tag instead. The systemd / launchd zero-downtime update flow described above does not apply to the Docker image.
+The image is otherwise stateless — every piece of state oxi-dns writes (`config.toml`, `query_log.db`, `stats.db`, `auth.db`, `cert.pem`, `key.pem`) lives under `/etc/oxi-dns/`, so a single named volume covers config, history, auth, and certs. `docker pull` + `docker rm` + `docker run` is non-destructive as long as the same volume is reattached.
+
+#### Updating the image
+
+The in-process auto-updater (`system.auto_update` in `config.toml`, the **Update** button in *Advanced → System*) **does not work in containers and should stay off**. It rewrites `/usr/local/bin/oxi-dns`, which is image-layer storage and is discarded on every container recreation. The dashboard detects the container runtime (via `/.dockerenv` / `/run/.containerenv`) and replaces the in-place "Update" call-to-action with a "View release →" link to the new GitHub release.
+
+For containerised installs, choose one of the following instead:
+
+| Tool | What it does | Best for |
+|---|---|---|
+| **Manual** (`docker pull && docker rm && docker run …`, or `docker compose pull && docker compose up -d`) | You decide when to upgrade. | Single hosts, anyone who wants a human in the loop. |
+| **[Watchtower](https://containrrr.dev/watchtower/)** | Polls the registry, pulls new images, recreates the container. Supports labels, schedules, and per-container opt-in. | Plain Docker hosts that want unattended updates. Pin a quiet hour with `--schedule` so an upgrade doesn't collide with an ACME renewal. |
+| **[Diun](https://crazymax.dev/diun/)** | Notifies you (Discord, ntfy, email, Gotify, Slack, …) when a new image digest is available, but doesn't pull anything. | "Tell me, don't touch it" workflows. |
+| **`podman auto-update`** | First-class Podman feature. Label the container `io.containers.autoupdate=registry`, generate a systemd unit with `podman generate systemd`, enable `podman-auto-update.timer`. | Podman + systemd hosts; the cleanest "update built into the runtime" option. |
+| **Renovate / Dependabot** | Opens a PR against your Compose file when the `ghcr.io/ron-png/oxi-dns:latest` digest changes. CI handles the rollout. | GitOps / IaC setups where Compose is checked into git. |
+| **Kubernetes image-update controllers** (Keel, Flux Image Automation, ArgoCD Image Updater) | Watch the registry and update the workload manifest. | Cluster deployments. |
+
+Whichever tool you use, the persistent volume at `/etc/oxi-dns/` carries everything across the upgrade — config, query log, stats, auth, certs.
+
+#### What works differently in a container
+
+A handful of features in oxi-dns assume a bare-metal init system (systemd, launchd, OpenRC) and a writable on-disk binary. Inside an image, those features either no-op, fall back to a coarser code path, or simply aren't reachable. The table below covers the gaps that aren't already mentioned in the cert section above.
+
+| Feature | Bare metal | In a container |
+|---|---|---|
+| **Listener port editing** (`dns.listen`, `web.listen`, `web.https_listen` ports + DoT/DoH/DoQ ports) | Editable from the dashboard's Network tab; the `--reconfigure` banner emits a `sudo … --reconfigure …` command that writes the new ports and restarts the service. | **Hidden in the dashboard.** A container's published ports are fixed at `docker run` time — changing the in-container listen port doesn't update the host's `-p HOST:CONTAINER` mapping, so it would silently break access. The dashboard detects the container runtime, hides every listener-port input, and shows an inline notice pointing here. To change a port, edit the `-p` lines in your `docker run` / Compose file on the host and recreate the container. |
+| **DoT / DoH / DoQ enable/disable toggles** | Toggling on binds the matching port in-process via the graceful restart. | Toggles are still visible. The recommended `docker run` / Compose pre-publishes 853/tcp, 853/udp, and 443/tcp so the toggles "just work" once enabled. Toggling produces a Docker-aware reconfigure banner — `docker exec oxi-dns oxi-dns --reconfigure dns.dot_listen=0.0.0.0:853 && docker restart oxi-dns` — that you run on the host. Substitute `podman` for `docker` if you use Podman. Expect ~1–3 s of DNS downtime during the restart. |
+| **`auto_redirect_https`, `trust_forwarded_proto`** | Live-applied via the API; non-port settings, no listener change. | Same — live-applied. Not affected by the container runtime. |
+| **`/opt/oxi-dns/oxi-dns` binary path** | Where the install script puts the binary. | Doesn't exist in the image. The binary is at `/usr/local/bin/oxi-dns` and is on `$PATH`, so any documented command can be invoked as `docker exec oxi-dns oxi-dns …`. |
+| **Install / uninstall scripts** (`scripts/install.sh`, `/opt/oxi-dns/uninstall.sh`) | Manage the systemd / launchd / OpenRC unit, drop the config in `/etc/oxi-dns/`, fetch the right binary, etc. | Not used. Install = `docker run`. Uninstall = `docker rm` (`docker volume rm oxi-dns-data` if you also want to wipe state). |
+| **Service restart** (`systemctl restart oxi-dns`, `launchctl unload/load`, `rc-service oxi-dns restart`) | Used by `--reconfigure`, `--update`, ACME install, and the manual cert upload flow. | Replaced by `docker restart oxi-dns` (or `docker compose restart oxi-dns`). Inside the image neither `systemctl`, `launchctl`, nor `rc-service` exist, so anything that internally tries to call them just falls through to the "Could not detect init system. Please restart oxi-dns manually." path. |
+| **`systemd-resolved` coordination** (port-53 conflict handling in `--reconfigure`) | The bare-metal flow disables/re-enables the systemd-resolved stub listener when you bind/unbind port 53. | Not applicable inside the container's network namespace. If `systemd-resolved` is running on the **host** and holding port 53, that's a *host* problem — disable it on the host, change `dns.listen` to a different port, or run with `--network host`. |
+| **In-process zero-downtime restart** (SO_REUSEPORT takeover via `--takeover` + `--ready-file`) | New child binds the same port alongside the old process, becomes ready, parent exits — zero DNS downtime. | The takeover child is in the container's PID namespace under PID 1. When the parent exits, the kernel SIGKILLs the child too. Docker's restart policy then cold-starts the entrypoint, which loads the persisted config from the volume. Net result: ~1–3 s of DNS downtime instead of zero. |
+| **Built-in auto-update** (`system.auto_update`) | Downloads a new binary, health-checks it, swaps the inode, performs the SO_REUSEPORT takeover. | Doesn't apply. The dashboard now **hides the auto-update toggle and the in-place "Update" button** in container mode, replacing them with a link back to [Updating the image](#updating-the-image). The "Check for Updates" button stays so you can see whether a newer image tag is available, and the update-available banner already links to the GitHub release. |
+| **Health check** (`oxi-dns --health-check`) | Used by systemd `ExecStartPre`. | Still works as a binary command — wire it into Docker's `HEALTHCHECK` directive if you want orchestration to react: `HEALTHCHECK --interval=30s --timeout=35s CMD ["oxi-dns", "--health-check"]`. (The current image doesn't ship a `HEALTHCHECK` line; add one in your own override if you need it.) |
 
 #### Certificates in containers
 

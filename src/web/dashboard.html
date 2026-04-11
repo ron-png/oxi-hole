@@ -974,6 +974,32 @@
             color: var(--text-muted);
         }
 
+        /* Container-mode notice that replaces hidden listener-port inputs in
+           the Network tab. Same visual weight as .info-box but lives inline
+           inside the network-field stack. */
+        .container-network-notice {
+            background: var(--bg-page);
+            border: 1px solid var(--border);
+            border-left: 3px solid var(--color-orange, #d97706);
+            border-radius: 6px;
+            padding: 12px 14px;
+            margin-bottom: 16px;
+            font-size: 13px;
+            color: var(--text-muted);
+            line-height: 1.5;
+        }
+        .container-network-notice strong {
+            color: var(--text-primary);
+            display: block;
+            margin-bottom: 4px;
+        }
+        .container-network-notice code {
+            background: var(--bg-elevated, rgba(0, 0, 0, 0.05));
+            padding: 1px 5px;
+            border-radius: 3px;
+            font-size: 12px;
+        }
+
         /* ---- Setting row ---- */
         .setting-row {
             display: flex;
@@ -2447,7 +2473,17 @@
                             <span class="toggle-slider"></span>
                         </label>
                     </div>
-                    <div class="network-field">
+                    <!-- Container-mode notice: replaces every listener-port input below
+                         when running inside Docker / Podman, where ports are fixed at
+                         `docker run` time and changing them from inside the container would
+                         silently break access. Hidden by default; revealed by
+                         applyContainerNetworkLayout() once is_container is known. -->
+                    <div class="container-network-notice" id="containerNetworkNotice" style="display: none;">
+                        <strong>&#9432; Listener ports are fixed by your container's <code>-p HOST:CONTAINER</code> mapping.</strong>
+                        Changing the in-container listen port wouldn't update the published port on your Docker / Podman host, so the inputs are hidden here. To change a port, edit the <code>-p</code> lines in your <code>docker run</code> or <code>compose.yaml</code> file and recreate the container.
+                        See the <a href="https://github.com/ron-png/oxi-dns#what-works-differently-in-a-container" target="_blank" rel="noopener">documentation &rarr;</a>
+                    </div>
+                    <div class="network-field" data-container-hide="port-only">
                         <label>DNS Server</label>
                         <div class="network-input-stack">
                             <div class="network-port-grid">
@@ -2464,7 +2500,7 @@
                             </div>
                         </div>
                     </div>
-                    <div class="network-field">
+                    <div class="network-field" data-container-hide="port-only">
                         <label>Web Dashboard (HTTP)</label>
                         <div class="network-input-stack">
                             <div class="network-port-grid">
@@ -2481,7 +2517,7 @@
                             </div>
                         </div>
                     </div>
-                    <div class="network-field">
+                    <div class="network-field" data-container-hide="port-only">
                         <label>Web Dashboard (HTTPS)</label>
                         <div class="network-input-stack">
                             <div class="network-port-grid">
@@ -2504,7 +2540,7 @@
                             <label class="toggle-switch"><input type="checkbox" id="toggle-dot"
                                     onchange="toggleProtocol('dot', this.checked)"><span
                                     class="toggle-slider"></span></label>
-                            <div class="network-input-stack">
+                            <div class="network-input-stack" data-container-hide="port-grid">
                                 <div class="network-port-grid">
                                     <div class="network-port-card">
                                         <div class="network-port-label">IPv4 Port</div>
@@ -2526,7 +2562,7 @@
                             <label class="toggle-switch"><input type="checkbox" id="toggle-doh"
                                     onchange="toggleProtocol('doh', this.checked)"><span
                                     class="toggle-slider"></span></label>
-                            <div class="network-input-stack">
+                            <div class="network-input-stack" data-container-hide="port-grid">
                                 <div class="network-port-grid">
                                     <div class="network-port-card">
                                         <div class="network-port-label">IPv4 Port</div>
@@ -2548,7 +2584,7 @@
                             <label class="toggle-switch"><input type="checkbox" id="toggle-doq"
                                     onchange="toggleProtocol('doq', this.checked)"><span
                                     class="toggle-slider"></span></label>
-                            <div class="network-input-stack">
+                            <div class="network-input-stack" data-container-hide="port-grid">
                                 <div class="network-port-grid">
                                     <div class="network-port-card">
                                         <div class="network-port-label">IPv4 Port</div>
@@ -2596,7 +2632,7 @@
                         <span class="toggle-slider"></span>
                     </label>
                 </div>
-                <div class="setting-row">
+                <div class="setting-row" id="autoUpdateSettingRow">
                     <div class="setting-info">
                         <h3>Auto-Update Server</h3>
                         <p class="warning">When enabled, oxi-dns automatically checks for updates every 8 hours. New
@@ -2607,6 +2643,24 @@
                         <input type="checkbox" id="autoUpdateCheckbox" onchange="toggleAutoUpdate(this.checked)">
                         <span class="toggle-slider"></span>
                     </label>
+                </div>
+                <!-- Container-mode replacement for the auto-update setting row.
+                     The in-process updater rewrites /usr/local/bin/oxi-dns, which
+                     is image-layer storage and gets discarded on container
+                     recreation, so the toggle is meaningless inside an image.
+                     Hidden by default; revealed by applyContainerNetworkLayout()
+                     once is_container is known. -->
+                <div class="setting-row" id="autoUpdateContainerNotice" style="display: none;">
+                    <div class="setting-info">
+                        <h3>Auto-Update Server</h3>
+                        <p>
+                            <strong>&#9432; Auto-update is disabled in containers.</strong>
+                            The in-process updater rewrites the binary on disk, which doesn't survive container recreation.
+                            Pull a new image tag instead — see
+                            <a href="https://github.com/ron-png/oxi-dns#updating-the-image" target="_blank" rel="noopener">Updating the image &rarr;</a>
+                            for Watchtower, Diun, <code>podman auto-update</code>, and other options.
+                        </p>
+                    </div>
                 </div>
                 <div class="setting-row manage-system-only">
                     <div class="setting-info">
@@ -2634,7 +2688,7 @@
                             <button type="button" class="btn btn-sm" id="checkUpdateBtn" onclick="checkForUpdates()">Check for
                                 Updates</button>
                             <button type="button" class="btn btn-green btn-sm" id="doUpdateBtn" onclick="performUpdate()"
-                                style="display: none;">Update</button>
+                                data-container-hide="auto-update" style="display: none;">Update</button>
                         </div>
                     </div>
                     <div id="updateMessage"></div>
@@ -2668,6 +2722,61 @@
 
         let currentMode = 'simple';
         let currentUser = null;
+        // Set from /api/system/security-status (refreshSecurityStatus). Used by
+        // the network reconfigure banner so containerised installs see a
+        // `docker exec … && docker restart …` command instead of the bare-metal
+        // `sudo /opt/oxi-dns/oxi-dns --reconfigure …` flow, which doesn't apply
+        // inside a container (no sudo, wrong binary path, and `--reconfigure`
+        // can't restart the entrypoint process from a separate exec).
+        let runningInContainer = false;
+
+        // Hide controls that don't make sense inside a container, and reveal
+        // the inline notices that replace them. Called once when
+        // refreshSecurityStatus first sees `is_container: true`. Idempotent —
+        // calling it twice is harmless.
+        //
+        // Hidden in a container:
+        //   - Listener-port inputs for dns.listen / web.listen / web.https_listen
+        //     (the published ports are fixed by `docker run -p HOST:CONTAINER`,
+        //     so editing them inside the container would silently break access).
+        //   - The port grids inside the DoT / DoH / DoQ proto-toggles. The
+        //     enable/disable toggle stays visible because the recommended
+        //     `docker run` pre-publishes 853/tcp, 443/tcp, and 853/udp, so
+        //     toggling those features on actually works.
+        //   - The Auto-Update Server toggle. The in-process updater rewrites
+        //     /usr/local/bin/oxi-dns, which is image-layer storage and gets
+        //     wiped on container recreation; the toggle is replaced with a
+        //     link to the README's "Updating the image" section.
+        //   - The in-place "Update" button next to the version display.
+        function applyContainerLayout() {
+            // Reveal the listener-ports notice and hide every element marked
+            // with the matching data-container-hide attribute.
+            const networkNotice = document.getElementById('containerNetworkNotice');
+            if (networkNotice) networkNotice.style.display = '';
+
+            document
+                .querySelectorAll('[data-container-hide="port-only"], [data-container-hide="port-grid"]')
+                .forEach((el) => {
+                    el.style.display = 'none';
+                });
+
+            // Swap the auto-update setting row for the container-friendly notice.
+            const autoUpdateRow = document.getElementById('autoUpdateSettingRow');
+            const autoUpdateContainerNotice = document.getElementById('autoUpdateContainerNotice');
+            if (autoUpdateRow) autoUpdateRow.style.display = 'none';
+            if (autoUpdateContainerNotice) autoUpdateContainerNotice.style.display = '';
+
+            // Hide the in-place "Update" button — only the bare-metal updater
+            // can use it. The "Check for Updates" button stays visible so the
+            // user can still see whether a new image tag is published, and
+            // the existing update-available banner already links to the
+            // GitHub release.
+            document
+                .querySelectorAll('[data-container-hide="auto-update"]')
+                .forEach((el) => {
+                    el.style.display = 'none';
+                });
+        }
 
         const ALL_PERMISSIONS = [
             'view_stats', 'view_logs', 'manage_features', 'manage_system',
@@ -4333,7 +4442,19 @@
         }
 
         function buildReconfigureCommand(changes) {
-            return `sudo /opt/oxi-dns/oxi-dns --reconfigure ${changes.map(shellQuote).join(' ')}`;
+            const args = changes.map(shellQuote).join(' ');
+            if (runningInContainer) {
+                // In a container the entrypoint process is PID 1, so it can't
+                // be restarted from inside its own namespace by --reconfigure
+                // (which spawns a child and exits the parent). The accurate
+                // flow is: edit config.toml from a one-shot exec'd process,
+                // then `docker restart` so the entrypoint reloads it. The
+                // exec'd `oxi-dns --reconfigure` writes the new listeners
+                // into the config file on the persistent volume; the
+                // `docker restart` makes the running server pick them up.
+                return `docker exec oxi-dns oxi-dns --reconfigure ${args} && docker restart oxi-dns`;
+            }
+            return `sudo /opt/oxi-dns/oxi-dns --reconfigure ${args}`;
         }
 
         function formatInterfaceEntries(entries) {
@@ -4750,10 +4871,16 @@
             }
 
             setReconfigBannerState({
-                title: '⚠ System command required',
-                description: 'This change requires root privileges. Run this command in your terminal:',
+                title: runningInContainer
+                    ? '⚠ Container restart required'
+                    : '⚠ System command required',
+                description: runningInContainer
+                    ? 'Listener changes are written to the config file on the persistent volume; the container needs to restart to bind the new sockets. Run this on your Docker host:'
+                    : 'This change requires root privileges. Run this command in your terminal:',
                 command: buildReconfigureCommand(changes),
-                note: 'The service will restart automatically.',
+                note: runningInContainer
+                    ? 'Substitute `podman` for `docker` if you use Podman. Expect ~1–3 s of DNS downtime while the container restarts.'
+                    : 'The service will restart automatically.',
                 canCopy: true,
             });
             if (!bannerDismissed) {
@@ -5045,8 +5172,15 @@
             if (info.update_available && info.latest_version) {
                 status.textContent = '\u2192 v' + info.latest_version + ' available';
                 status.style.color = 'var(--color-green)';
-                updateBtn.style.display = 'inline-block';
-                updateBtn.textContent = 'Update to v' + info.latest_version;
+                // The in-place "Update" button only works on bare-metal installs.
+                // In a container the update banner (handled by updateUpdateBanner)
+                // already shows a "View release →" link to the GitHub release;
+                // showing a button here that POSTs /api/system/update would just
+                // rewrite a binary that gets discarded on container recreation.
+                if (!runningInContainer) {
+                    updateBtn.style.display = 'inline-block';
+                    updateBtn.textContent = 'Update to v' + info.latest_version;
+                }
                 msg.style.display = 'none';
             } else if (info.latest_version) {
                 status.textContent = '(up to date)';
@@ -5586,6 +5720,27 @@
                 const res = await fetch('/api/system/security-status', { credentials: 'include' });
                 if (!res.ok) return;
                 const status = await res.json();
+
+                // Cache for buildReconfigureCommand / checkNetworkChanges so the
+                // network panel can swap in a docker-aware command, and for
+                // applyContainerLayout() so the dashboard can hide controls
+                // that don't apply in a container. The flag doesn't change for
+                // the lifetime of the process, but we refresh it on every poll
+                // for free since the field is already in the payload.
+                const wasContainer = runningInContainer;
+                runningInContainer = !!status.is_container;
+                if (runningInContainer && !wasContainer) {
+                    // First time we learn we're inside a container — hide the
+                    // listener-port inputs and the auto-update toggle, and
+                    // show the inline notices that replace them.
+                    applyContainerLayout();
+                }
+                if (typeof checkNetworkChanges === 'function' && networkInputsInitialized) {
+                    // If the user already has pending changes when the flag
+                    // first lands, regenerate the banner so it switches from
+                    // the bare-metal command to the docker variant.
+                    checkNetworkChanges();
+                }
 
                 const banner = document.getElementById('passwordRotationBanner');
                 if (banner) {
