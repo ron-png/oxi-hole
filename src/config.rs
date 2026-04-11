@@ -87,6 +87,12 @@ pub struct WebConfig {
     /// password change. Drives the dashboard password-rotation banner.
     #[serde(default)]
     pub password_change_recommended: bool,
+    /// Trust the X-Forwarded-Proto header from a reverse proxy to determine
+    /// whether a request should be treated as HTTPS. ONLY enable if oxi-dns
+    /// is ONLY reachable through a trusted TLS-terminating proxy — otherwise
+    /// attackers can spoof the header and bypass HTTPS-required checks.
+    #[serde(default)]
+    pub trust_forwarded_proto: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -295,6 +301,7 @@ fn default_web() -> WebConfig {
         https_listen: None,
         auto_redirect_https: false,
         password_change_recommended: false,
+        trust_forwarded_proto: false,
     }
 }
 
@@ -466,5 +473,14 @@ listen = ["0.0.0.0:9853"]
         assert!(!cfg.auto_redirect_https);
         assert!(!cfg.password_change_recommended);
         assert!(cfg.https_listen.is_none());
+    }
+
+    #[test]
+    fn web_config_trust_forwarded_proto_defaults_false() {
+        let toml_str = r#"
+listen = ["0.0.0.0:9853"]
+"#;
+        let cfg: WebConfig = toml::from_str(toml_str).expect("parse");
+        assert!(!cfg.trust_forwarded_proto);
     }
 }

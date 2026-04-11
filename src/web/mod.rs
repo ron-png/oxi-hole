@@ -294,6 +294,30 @@ async fn mark_https_middleware(
     next.run(request).await
 }
 
+/// When `trust_forwarded_proto` is enabled, inspect incoming HTTP requests for
+/// `X-Forwarded-Proto: https` and insert the `IsHttps` extension if found.
+/// This allows reverse-proxied deployments (TLS-terminating proxy → plain HTTP
+/// to oxi-dns) to signal that the original request arrived over HTTPS.
+///
+/// SECURITY: Only layer this middleware when `trust_forwarded_proto` is true,
+/// and only when oxi-dns is exclusively reachable through a trusted proxy.
+async fn mark_https_from_forwarded_proto_middleware(
+    mut request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    let is_forwarded_https = request
+        .headers()
+        .get("x-forwarded-proto")
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.eq_ignore_ascii_case("https"))
+        .unwrap_or(false);
+
+    if is_forwarded_https {
+        request.extensions_mut().insert(IsHttps);
+    }
+    next.run(request).await
+}
+
 /// Paths that handle sensitive data (passwords, API tokens, private keys)
 /// and must be accessed over HTTPS when it's available.
 const SENSITIVE_PATHS: &[&str] = &[
@@ -329,6 +353,7 @@ pub async fn run_web_server(
     https_listen: Option<&[String]>,
     tls_config: Option<Arc<rustls::ServerConfig>>,
     auto_redirect_https: bool,
+    trust_forwarded_proto: bool,
     state: AppState,
 ) -> anyhow::Result<()> {
     let auth_for_middleware = state.auth.clone();
@@ -595,6 +620,16 @@ pub async fn run_web_server(
         // In case 2, sensitive endpoints are still protected by
         // sensitive_https_middleware (Task 3), which blocks plain-HTTP
         // requests to SENSITIVE_PATHS regardless of HTTPS state.
+        //
+        // When trust_forwarded_proto is enabled, layer the forwarded-proto
+        // middleware so that reverse-proxied HTTPS requests are recognised.
+        let app = if trust_forwarded_proto {
+            app.layer(axum::middleware::from_fn(
+                mark_https_from_forwarded_proto_middleware,
+            ))
+        } else {
+            app
+        };
         for addr in listen {
             let app = app.clone();
             let sock_addr: std::net::SocketAddr = addr.parse()?;
@@ -727,6 +762,7 @@ async fn api_system_network(
         "web_listen": config.web.listen,
         "https_listen": config.web.https_listen,
         "auto_redirect_https": config.web.auto_redirect_https,
+        "trust_forwarded_proto": config.web.trust_forwarded_proto,
         "dot_listen": config.dns.dot_listen,
         "doh_listen": config.dns.doh_listen,
         "doq_listen": config.dns.doq_listen,
@@ -748,6 +784,7 @@ struct UpdateNetworkRequest {
     web_listen: Option<serde_json::Value>,
     https_listen: Option<serde_json::Value>,
     auto_redirect_https: Option<bool>,
+    trust_forwarded_proto: Option<bool>,
     dot_listen: Option<serde_json::Value>,
     doh_listen: Option<serde_json::Value>,
     doq_listen: Option<serde_json::Value>,
@@ -872,6 +909,16 @@ async fn api_update_network(
         password_flag_set = true;
     }
 
+    if let Some(enabled) = req.trust_forwarded_proto {
+        config.web.trust_forwarded_proto = enabled;
+        if enabled {
+            tracing::warn!(
+                "web.trust_forwarded_proto enabled — ensure oxi-dns is ONLY reachable \
+                 through a trusted TLS-terminating reverse proxy"
+            );
+        }
+    }
+
     if let Some(ref val) = req.dot_listen {
         config.dns.dot_listen = match parse_optional_listen_value(val) {
             Ok(listen) => listen,
@@ -934,6 +981,7 @@ async fn api_update_network(
         "web_listen": config.web.listen,
         "https_listen": config.web.https_listen,
         "auto_redirect_https": config.web.auto_redirect_https,
+        "trust_forwarded_proto": config.web.trust_forwarded_proto,
         "dot_listen": config.dns.dot_listen,
         "doh_listen": config.dns.doh_listen,
         "doq_listen": config.dns.doq_listen,
@@ -2986,5 +3034,49 @@ mod sensitive_https_middleware_tests {
             .unwrap();
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn forwarded_proto_https_is_trusted_when_middleware_present() {
+        let app = Router::new()
+            .route(
+                "/api/system/tls/upload",
+                post(|| async { StatusCode::OK }),
+            )
+            .layer(axum::middleware::from_fn(sensitive_https_middleware))
+            .layer(axum::middleware::from_fn(
+                mark_https_from_forwarded_proto_middleware,
+            ));
+
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/system/tls/upload")
+            .header("x-forwarded-proto", "https")
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn forwarded_proto_http_is_not_trusted() {
+        let app = Router::new()
+            .route(
+                "/api/system/tls/upload",
+                post(|| async { StatusCode::OK }),
+            )
+            .layer(axum::middleware::from_fn(sensitive_https_middleware))
+            .layer(axum::middleware::from_fn(
+                mark_https_from_forwarded_proto_middleware,
+            ));
+
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/system/tls/upload")
+            .header("x-forwarded-proto", "http")
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
     }
 }

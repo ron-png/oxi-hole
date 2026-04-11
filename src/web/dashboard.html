@@ -2406,6 +2406,16 @@
                             <span class="toggle-slider"></span>
                         </label>
                     </div>
+                    <div class="setting-row" style="margin-bottom: 16px;">
+                        <div class="setting-info">
+                            <h3>Trust X-Forwarded-Proto header</h3>
+                            <p>&#9888; Only enable if oxi-dns is reachable exclusively through a trusted TLS-terminating reverse proxy. Attackers can spoof this header if oxi-dns is directly reachable.</p>
+                        </div>
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="toggle-trust-forwarded-proto" onchange="toggleTrustForwardedProto(this.checked)">
+                            <span class="toggle-slider"></span>
+                        </label>
+                    </div>
                     <div class="network-field">
                         <label>DNS-over-TLS</label>
                         <div class="proto-toggle">
@@ -4032,6 +4042,12 @@
                 autoRedirectToggle.disabled = !httpsListen || (Array.isArray(httpsListen) && httpsListen.length === 0);
             }
 
+            // Sync the trust-forwarded-proto toggle from the server state
+            const trustForwardedProtoToggle = document.getElementById('toggle-trust-forwarded-proto');
+            if (trustForwardedProtoToggle) {
+                trustForwardedProtoToggle.checked = !!serverNetworkState.trust_forwarded_proto;
+            }
+
             networkInputsInitialized = true;
             renderNetworkTargets();
         }
@@ -4387,6 +4403,29 @@
                 if (toggle) toggle.checked = !enabled;
             } finally {
                 if (toggle) toggle.disabled = false;
+            }
+        }
+
+        async function toggleTrustForwardedProto(enabled) {
+            const toggle = document.getElementById('toggle-trust-forwarded-proto');
+            if (!toggle) return;
+            toggle.disabled = true;
+            try {
+                const res = await fetch('/api/system/network', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ trust_forwarded_proto: enabled }),
+                });
+                if (res.ok) {
+                    const data = await res.json();
+                    serverNetworkState.trust_forwarded_proto = data.trust_forwarded_proto ?? enabled;
+                } else {
+                    toggle.checked = !enabled;
+                }
+            } catch {
+                toggle.checked = !enabled;
+            } finally {
+                toggle.disabled = false;
             }
         }
 

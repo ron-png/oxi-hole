@@ -604,6 +604,7 @@ async fn main() -> anyhow::Result<()> {
     let web_listen = config.web.listen.clone();
     let web_https_listen = config.web.https_listen.clone();
     let auto_redirect_https = config.web.auto_redirect_https;
+    let trust_forwarded_proto = config.web.trust_forwarded_proto;
 
     let web_tls_config = if web_https_listen.is_some() {
         match tls::build_server_config(&config.tls, vec![b"h2".to_vec(), b"http/1.1".to_vec()]) {
@@ -623,6 +624,7 @@ async fn main() -> anyhow::Result<()> {
             web_https_listen.as_deref(),
             web_tls_config,
             auto_redirect_https,
+            trust_forwarded_proto,
             web_state,
         )
         .await
