@@ -801,7 +801,6 @@ Bug reports, feature requests, and pull requests are welcome. Open an issue on G
 Please note that this list is not a promise, rather thoughts I might change my mind on in the future. Feel free to share your opinion and suggestions for the future of this project.
 
 ### Goals for Version 1:
-- Make the UI more user friendly (feature)
 - Verify DNS over QUIC work (feature)
 - When enabling DoH, the user should be able to define the https request path (feature)
   - make sure that the path is not used by any other service on the same server.
