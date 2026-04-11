@@ -815,6 +815,7 @@ Please note that this list is not a promise, rather thoughts I might change my m
 - the oxi-dns command should be able to signal to the web UI that the config has changed and the UI should reload the config. (feature)
 
 ### Goals for Version 2:
+- Make sure that system resources don't get overloaded so the server might crash. (ram and storage management)
 - Add a "Test" button for the upstream DNS servers (feature)
 - add oxi-dns cli commands. (adding certificate, rebooting the server) 
 - Security enhancements
