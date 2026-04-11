@@ -2260,7 +2260,7 @@
                         </div>
                     </div>
                     <div class="network-field">
-                        <label>Web Dashboard</label>
+                        <label>Web Dashboard (HTTP)</label>
                         <div class="network-input-stack">
                             <div class="network-port-grid">
                                 <div class="network-port-card">
@@ -2275,6 +2275,38 @@
                                 </div>
                             </div>
                         </div>
+                    </div>
+                    <div class="network-field">
+                        <label>Web Dashboard (HTTPS)</label>
+                        <div class="proto-toggle">
+                            <label class="toggle-switch"><input type="checkbox" id="toggle-web-https"
+                                    onchange="toggleProtocol('https', this.checked)"><span
+                                    class="toggle-slider"></span></label>
+                            <div class="network-input-stack">
+                                <div class="network-port-grid">
+                                    <div class="network-port-card">
+                                        <div class="network-port-label">IPv4 Port</div>
+                                        <input type="number" id="net-web-https-ipv4-port" placeholder="9854" min="1" max="65535" inputmode="numeric" onbeforeinput="preventInvalidPortInput(event)" oninput="handleNetworkPortInput(this)" disabled>
+                                        <div class="listen-target" id="net-web-https-ipv4-target"></div>
+                                    </div>
+                                    <div class="network-port-card">
+                                        <div class="network-port-label">IPv6 Port</div>
+                                        <input type="number" id="net-web-https-ipv6-port" placeholder="9854" min="1" max="65535" inputmode="numeric" onbeforeinput="preventInvalidPortInput(event)" oninput="handleNetworkPortInput(this)" disabled>
+                                        <div class="listen-target" id="net-web-https-ipv6-target"></div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="setting-row" style="margin-bottom: 16px;">
+                        <div class="setting-info">
+                            <h3>Auto-redirect HTTP &rarr; HTTPS</h3>
+                            <p>When enabled, all plain HTTP requests are redirected to HTTPS. Requires HTTPS to be configured.</p>
+                        </div>
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="toggle-auto-redirect-https">
+                            <span class="toggle-slider"></span>
+                        </label>
                     </div>
                     <div class="network-field">
                         <label>DNS-over-TLS</label>
@@ -3793,7 +3825,8 @@
         let dismissedNetworkSignature = '';
         const NETWORK_LISTENERS = [
             { prefix: 'net-dns', key: 'dns.listen', serverKey: 'dns_listen', label: 'DNS Server', required: true, defaultPort: '53' },
-            { prefix: 'net-web', key: 'web.listen', serverKey: 'web_listen', label: 'Web Dashboard', required: true, defaultPort: '9853' },
+            { prefix: 'net-web', key: 'web.listen', serverKey: 'web_listen', label: 'Web Dashboard (HTTP)', required: true, defaultPort: '9853' },
+            { prefix: 'net-web-https', key: 'web.https_listen', serverKey: 'https_listen', label: 'Web Dashboard (HTTPS)', required: false, toggleId: 'toggle-web-https', proto: 'https', defaultPort: '9854' },
             { prefix: 'net-dot', key: 'dns.dot_listen', serverKey: 'dot_listen', label: 'DNS-over-TLS', required: false, toggleId: 'toggle-dot', proto: 'dot', defaultPort: '853' },
             { prefix: 'net-doh', key: 'dns.doh_listen', serverKey: 'doh_listen', label: 'DNS-over-HTTPS', required: false, toggleId: 'toggle-doh', proto: 'doh', defaultPort: '443' },
             { prefix: 'net-doq', key: 'dns.doq_listen', serverKey: 'doq_listen', label: 'DNS-over-QUIC', required: false, toggleId: 'toggle-doq', proto: 'doq', defaultPort: '853' },
