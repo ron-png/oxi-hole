@@ -235,6 +235,38 @@ Most settings are configurable at runtime through the web dashboard. The full se
 
 Upstream formats: `udp://`, `tls://`, `https://`, `quic://` — defaults to UDP if no prefix.
 
+## Command-line options
+
+The `oxi-dns` binary is normally started by its systemd / launchd unit with
+no arguments, but every option it accepts is documented here for
+completeness. The packaged install path is `/opt/oxi-dns/oxi-dns`.
+
+```
+oxi-dns [CONFIG_PATH] [OPTIONS]
+```
+
+| Option | Description |
+|---|---|
+| `CONFIG_PATH` (positional) | Path to a `config.toml` to load. Defaults to `/etc/oxi-dns/config.toml` when omitted. The first bare argument (one that doesn't start with `-` and isn't consumed by another flag) is treated as the config path. |
+| `--version`, `-V` | Print `oxi-dns <version>` and exit. |
+| `--health-check` | Load the config, build the upstream client, issue a local DNS query end-to-end, and exit `0` on success. Intended for systemd `ExecStartPre` / graceful-restart health checks; a 30 s timeout aborts hung checks. |
+| `--reconfigure KEY=VALUE …` | Apply one or more network-listener changes and restart the service (requires root). See [Reconfigure](#reconfigure) below for the accepted keys. Any number of `key=value` pairs may follow the flag. |
+| `--takeover` | Marker used by the in-process graceful-restart flow to tell a freshly spawned child that it's taking over from a running parent. `SO_REUSEPORT` makes the hand-off seamless; the flag itself is a no-op beyond signalling intent. Not intended for manual use. |
+| `--ready-file PATH` | Write-path used together with `--takeover`: when the child has successfully bound its listeners, it touches `PATH` to tell the parent process it's ready to replace it. Not intended for manual use. |
+
+Examples:
+
+```bash
+# Print the version
+oxi-dns --version
+
+# Load a non-default config path
+oxi-dns /etc/oxi-dns/custom.toml
+
+# Run the health check (used by the graceful-restart flow)
+oxi-dns --health-check
+```
+
 ## Reconfigure
 
 Change network listen addresses from the command line (requires root):
@@ -243,11 +275,23 @@ Change network listen addresses from the command line (requires root):
 sudo oxi-dns --reconfigure dns.listen=0.0.0.0:5353
 sudo oxi-dns --reconfigure web.listen=0.0.0.0:3000
 sudo oxi-dns --reconfigure dns.listen=0.0.0.0:53 dns.dot_listen=0.0.0.0:853
+sudo oxi-dns --reconfigure web.https_listen=0.0.0.0:9854 web.https_listen=[::]:9854
 ```
 
-Handles systemd-resolved automatically when switching to/from port 53. The dashboard also generates these commands for you when you edit network settings.
+Accepted keys:
 
-Note that `web.https_listen`, `web.auto_redirect_https`, and `web.trust_forwarded_proto` are **not** accepted by `--reconfigure` — they are web-editable via the Network tab (see below).
+| Key | Required | Clears with empty value? |
+|---|---|---|
+| `dns.listen` | yes | no |
+| `web.listen` | yes | no |
+| `web.https_listen` | yes | no |
+| `dns.dot_listen` | no | yes (`dns.dot_listen=`) |
+| `dns.doh_listen` | no | yes (`dns.doh_listen=`) |
+| `dns.doq_listen` | no | yes (`dns.doq_listen=`) |
+
+Repeat the same key to bind multiple addresses (e.g. IPv4 + IPv6). `--reconfigure` handles systemd-resolved automatically when switching to/from port 53. The dashboard's Network tab also generates these commands for you when you edit any listen field.
+
+`web.auto_redirect_https` and `web.trust_forwarded_proto` are **not** accepted by `--reconfigure` — they are web-editable via the Network tab and take effect through the in-process graceful restart (see below).
 
 ## HTTPS & Reverse Proxy
 
@@ -259,7 +303,7 @@ Sensitive endpoints — TLS cert upload, ACME provider tokens, login, setup, and
 
 | Field | Default | Effect |
 |-------|---------|-------|
-| `web.https_listen` | `["0.0.0.0:9854", "[::]:9854"]` | HTTPS listener for the dashboard. Set to `null` to disable. Port is editable in the Network tab; the change rebinds on save. |
+| `web.https_listen` | `["0.0.0.0:9854", "[::]:9854"]` | HTTPS listener for the dashboard. Always on — there is no enable/disable toggle. Ports are editable in the Network tab; saving emits a `sudo oxi-dns --reconfigure web.https_listen=…` command through the reconfig banner, same as DNS / HTTP / DoT / DoH / DoQ. |
 | `web.auto_redirect_https` | `false` | When enabled, all HTTP requests get a 308 redirect to HTTPS. When disabled, HTTP still serves the dashboard for non-sensitive endpoints. |
 | `web.trust_forwarded_proto` | `false` | Opt-in for reverse-proxied deployments (see below). ⚠ Security-critical. |
 
@@ -556,7 +600,7 @@ curl -H "Authorization: Bearer $OXI_TOKEN" -X POST http://localhost:9853/api/sys
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | `GET` | `/api/system/network` | Current listen addresses and network interfaces |
-| `POST` | `/api/system/network` | Update DoT/DoH/DoQ listen addresses (DNS and web require `--reconfigure`) |
+| `POST` | `/api/system/network` | Update DoT/DoH/DoQ listen addresses and the `auto_redirect_https` / `trust_forwarded_proto` toggles. Changes to `dns.listen`, `web.listen`, and `web.https_listen` must go through `sudo oxi-dns --reconfigure` (the dashboard generates the exact command in its reconfig banner). |
 
 ### TLS Certificate Management
 
@@ -768,6 +812,8 @@ Please note that this list is not a promise, rather thoughts I might change my m
 - in addition, harden DoH, DoT and DoQ (feature) (pathing attacks, etc)
 - Verify that changing Settings in the UI (Like Port or listen address) works with the generated terminal commands. (ipv4 yes, ipv6 has to be fixed)
 - add a warning for cloudflare users, that the proxy should be disabled for oxi-dns to work properly. 
+- the oxi-dns command should be able to do everything the UI can do. (feature)
+- the oxi-dns command should be able to signal to the web UI that the config has changed and the UI should reload the config. (feature)
 
 ### Goals for Version 2:
 - Add a "Test" button for the upstream DNS servers (feature)
