@@ -1933,6 +1933,15 @@
             </div>
             <a id="httpWarningSwitchBtn" class="security-banner__action" href="#">Switch to HTTPS →</a>
         </div>
+        <!-- Password rotation recommendation banner -->
+        <div id="passwordRotationBanner" class="security-banner security-banner--warning" style="display:none;">
+            <span class="security-banner__icon">🔑</span>
+            <div class="security-banner__body">
+                <strong>HTTPS is now active.</strong>
+                Your account password may have been transmitted in plaintext before HTTPS was enabled. We recommend changing it now.
+            </div>
+            <a id="passwordRotationBtn" class="security-banner__action" href="#">Change password →</a>
+        </div>
         <!-- Auto-update status notification -->
         <div id="updateNotification"
             style="display: none; padding: 12px 16px; border-radius: 8px; margin-bottom: 16px; position: relative;">
@@ -2854,6 +2863,7 @@
                 }
                 closeModal();
                 alert('Password changed successfully.');
+                refreshSecurityStatus();
             } catch (e) { alert('Error: ' + e.message); }
         }
 
@@ -5195,6 +5205,38 @@
                 })
                 .catch(() => { btn.style.display = 'none'; });
         })();
+
+        // ---- Password rotation banner ----
+        async function refreshSecurityStatus() {
+            try {
+                const res = await fetch('/api/system/security-status', { credentials: 'include' });
+                if (!res.ok) return;
+                const status = await res.json();
+                const banner = document.getElementById('passwordRotationBanner');
+                if (!banner) return;
+                // Only show on HTTPS — on HTTP, the HTTP banner takes precedence
+                // and the user can't actually change their password anyway
+                if (status.password_change_recommended && window.location.protocol === 'https:') {
+                    banner.style.display = 'flex';
+                } else {
+                    banner.style.display = 'none';
+                }
+            } catch (e) {
+                // Silent — banner just doesn't show
+            }
+        }
+
+        (function setupPasswordRotationBanner() {
+            const btn = document.getElementById('passwordRotationBtn');
+            if (!btn) return;
+            btn.addEventListener('click', (e) => {
+                e.preventDefault();
+                showChangePasswordModal();
+            });
+        })();
+
+        // Call on init
+        refreshSecurityStatus();
 
         // ---- Auto-refresh ----
         // Initialize: fetch user first, then load data
