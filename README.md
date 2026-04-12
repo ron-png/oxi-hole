@@ -38,6 +38,29 @@ docker run -d --name oxi-dns \
 
 Then open the dashboard at **http://<host>:9853** (or **https://<host>:9854** with the auto-generated self-signed cert) and point a device's DNS at the server's IP. That's it — ads and trackers are blocked network-wide. The encrypted-DNS ports (DoT 853, DoH 443, DoQ 853/udp) are pre-published so you can just toggle them on in the dashboard later — drop `-p 443:443/tcp` if you already run a web server on the host. See [Installation](#installation) and [Configuration](#configuration) for details.
 
+## Table of Contents
+
+- [Why Oxi-DNS?](#why-oxi-dns)
+- [Features](#features)
+  - [DNS Protocol Support](#dns-protocol-support)
+  - [Network-Wide Ad & Tracker Blocking](#network-wide-ad--tracker-blocking)
+  - [DNS Blocking Modes](#dns-blocking-modes)
+  - [IPv6 Support](#ipv6-support)
+  - [Reliable Auto-Update](#reliable-auto-update)
+  - [Web Dashboard](#web-dashboard)
+  - [Query Logging & Statistics](#query-logging--statistics)
+- [Installation](#installation)
+  - [Install Script](#install-script)
+  - [Docker / Podman](#docker--podman)
+- [Configuration](#configuration)
+- [Command-line options](#command-line-options)
+- [Reconfigure](#reconfigure)
+- [HTTPS & Reverse Proxy](#https--reverse-proxy)
+- [Uninstall](#uninstall)
+- [API Reference](#api-reference)
+- [Contributing](#contributing)
+- [TODO/PLANS](#todoplans)
+
 ## Why Oxi-DNS?
 
 - **Single binary, zero dependencies** — no Python, no PHP, no database server to maintain
@@ -198,7 +221,7 @@ Open the dashboard at **http://<host>:9853** or **https://<host>:9854** (HTTPS u
 
 **Why all the ports up front?** A container's published ports are fixed at `docker run` time — there's no way to add them later from inside the container. To save you a recreate later, the recommended command pre-publishes every listener oxi-dns can bind: plain DNS (53), DoT (853/tcp), DoQ (853/udp), DoH (443), HTTP dashboard (9853), HTTPS dashboard (9854). The DoT/DoH/DoQ listeners are still **off in the config by default** — flip them on from the Network tab of the dashboard whenever you want, and the published ports will already be there. You can drop any `-p` line you don't need.
 
-**Conflict with port 443**: a lot of hosts already run a web server or reverse proxy on 443. If `docker run` fails with "address already in use" on 443, drop `-p 443:443/tcp`. You can keep DoT/DoQ on 853 even when DoH isn't published — and when you enable DoH later, it'll bind inside the container but won't be reachable from outside until you republish the port.
+**Conflict with port 443**: a lot of hosts already run a web server or reverse proxy on 443. If `docker run` fails with "address already in use" on 443, drop `-p 443:443/tcp`. You can keep DoT/DoQ on 853 even when DoH isn't published — and when you enable DoH later, it'll bind inside the container but won't be reachable from outside until you republish the port. Alternatively, bind the container's DoH to a different host port (e.g. `-p 8443:443/tcp`) and use your existing reverse proxy to forward `https://dns.example.com` to `localhost:8443` — see [HTTPS & Reverse Proxy](#https--reverse-proxy) for nginx and Caddy examples.
 
 **Conflict with port 53**: if the host already runs a DNS resolver, the `-p 53:53` bindings will fail with `address already in use` (or `failed to bind host port 0.0.0.0:53/tcp`). On most modern Linux distros — Ubuntu, Debian 11+, Fedora, RHEL 9+, openSUSE — the culprit is **`systemd-resolved`**: it binds `127.0.0.53:53` as a stub resolver, and Docker's `0.0.0.0:53` bind overlaps with it because `0.0.0.0` covers every interface including the loopback alias. (`dnsmasq`, `unbound`, `BIND`, or another container can also be the cause; check with `sudo ss -lunp 'sport = :53'` to see which.)
 
