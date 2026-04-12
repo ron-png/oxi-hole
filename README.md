@@ -966,6 +966,7 @@ Please note that this list is not a promise, rather thoughts I might change my m
 - add a warning for cloudflare users, that the proxy should be disabled for oxi-dns to work properly. 
 - the oxi-dns command should be able to do everything the UI can do. (feature)
 - the oxi-dns command should be able to signal to the web UI that the config has changed and the UI should reload the config. (feature)
+- test the container images
 
 ### Goals for Version 2:
 - Make sure that system resources don't get overloaded so the server might crash. (ram and storage management)
