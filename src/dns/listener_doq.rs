@@ -143,10 +143,26 @@ async fn handle_doq_stream(
         anyhow::bail!("Empty DoQ message");
     }
 
-    // RFC 9250 §4.2.1: DNS Message ID MUST be 0 over QUIC.
-    // Many clients (e.g. kdig) still send non-zero IDs, so we zero it
-    // and process the query rather than rejecting it outright.
+    // Some clients (e.g. kdig) send a 2-byte TCP-style length prefix even
+    // though RFC 9250 §4.2 says QUIC streams don't need one.  Detect and
+    // strip it: if the first two bytes, read as a big-endian u16, equal the
+    // remaining length of the buffer, they're a length prefix, not the DNS
+    // message ID.
     let mut msg_buf = msg_buf;
+    if msg_buf.len() >= 14 {
+        let maybe_len = u16::from_be_bytes([msg_buf[0], msg_buf[1]]) as usize;
+        if maybe_len == msg_buf.len() - 2 {
+            debug!(
+                "DoQ: stripping 2-byte TCP-style length prefix from {}",
+                client_ip
+            );
+            msg_buf = msg_buf[2..].to_vec();
+        }
+    }
+
+    // RFC 9250 §4.2.1: DNS Message ID MUST be 0 over QUIC.
+    // Many clients still send non-zero IDs, so we zero it and process
+    // the query rather than rejecting it outright.
     if msg_buf.len() >= 2 && (msg_buf[0] != 0 || msg_buf[1] != 0) {
         debug!("DoQ: zeroing non-zero DNS Message ID from {}", client_ip);
         msg_buf[0] = 0;
