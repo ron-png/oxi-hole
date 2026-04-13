@@ -144,10 +144,13 @@ async fn handle_doq_stream(
     }
 
     // RFC 9250 §4.2.1: DNS Message ID MUST be 0 over QUIC.
-    // "A DoQ implementation MUST … treat receipt of a non-zero ID as a DOQ_PROTOCOL_ERROR."
+    // Many clients (e.g. kdig) still send non-zero IDs, so we zero it
+    // and process the query rather than rejecting it outright.
+    let mut msg_buf = msg_buf;
     if msg_buf.len() >= 2 && (msg_buf[0] != 0 || msg_buf[1] != 0) {
-        connection.close(DOQ_PROTOCOL_ERROR, b"non-zero message ID");
-        anyhow::bail!("DoQ: non-zero DNS Message ID (RFC 9250 §4.2.1)");
+        debug!("DoQ: zeroing non-zero DNS Message ID from {}", client_ip);
+        msg_buf[0] = 0;
+        msg_buf[1] = 0;
     }
 
     let response = match handler::process_dns_query(

@@ -53,6 +53,13 @@ Then open the dashboard at **http://<host>:9853** (or **https://<host>:9854** wi
   - [Install Script](#install-script)
   - [Docker / Podman](#docker--podman)
 - [Configuration](#configuration)
+  - [\[dns\]](#dns)
+  - [\[web\]](#web)
+  - [\[blocking\]](#blocking)
+  - [\[tls\]](#tls)
+  - [\[tls.acme\]](#tlsacme)
+  - [\[system\]](#system)
+  - [\[log\]](#log)
 - [Command-line options](#command-line-options)
 - [Reconfigure](#reconfigure)
 - [HTTPS & Reverse Proxy](#https--reverse-proxy)
@@ -361,7 +368,7 @@ The HTTPS dashboard cert workflows all *function* in the image, but the in-proce
 
 ## Configuration
 
-Default config (`config.toml`):
+Most settings are configurable at runtime through the web dashboard. The config file is located at `/etc/oxi-dns/config.toml` and only a minimal subset is needed to get started:
 
 ```toml
 [dns]
@@ -375,18 +382,149 @@ upstreams = [
 listen = "0.0.0.0:9853"
 ```
 
-Most settings are configurable at runtime through the web dashboard. The full set of config sections:
+Everything else is optional and defaults to sensible values. All listen fields accept either a single string or a list of strings (e.g. `"0.0.0.0:53"` or `["0.0.0.0:53", "[::]:53"]`).
 
-| Section | Key settings |
-|---------|-------------|
-| `[dns]` | `listen`, `dot_listen`, `doh_listen`, `doq_listen`, `upstreams`, `timeout_ms`, `cache_enabled` |
-| `[web]` | `listen`, `https_listen`, `auto_redirect_https`, `trust_forwarded_proto` (see [HTTPS & Reverse Proxy](#https--reverse-proxy)) |
-| `[blocking]` | `enabled`, `blocklists`, `custom_blocked`, `allowlist`, `blocking_mode`, `update_interval_minutes`, `enabled_features` |
-| `[tls]` | `cert_path`, `key_path` (auto-generates self-signed if omitted) |
-| `[system]` | `auto_update`, `ipv6_enabled`, `release_channel` |
-| `[log]` | `query_log_retention_days`, `stats_retention_days`, `anonymize_client_ip` |
+### `[dns]`
 
-Upstream formats: `udp://`, `tls://`, `https://`, `quic://` — defaults to UDP if no prefix.
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `listen` | string \| list | `["0.0.0.0:53", "[::]:53"]` | Addresses for plain DNS (UDP + TCP). |
+| `dot_listen` | string \| list | *not set* | Addresses for DNS-over-TLS. Typically `"0.0.0.0:853"`. Requires a TLS certificate (auto-generates self-signed if none configured). |
+| `doh_listen` | string \| list | *not set* | Addresses for DNS-over-HTTPS. Typically `"0.0.0.0:443"`. Uses HTTP/2 (h2 ALPN). |
+| `doq_listen` | string \| list | *not set* | Addresses for DNS-over-QUIC. Typically `"0.0.0.0:853"` (UDP). Shares port number with DoT but on a different transport. |
+| `upstreams` | list | `["tls://9.9.9.9:853", "tls://1.1.1.1:853"]` | Upstream DNS servers. Prefix with `udp://`, `tls://`, `https://`, or `quic://`. No prefix defaults to UDP. |
+| `timeout_ms` | integer | `5000` | Timeout for upstream queries in milliseconds. |
+| `cache_enabled` | bool | `true` | Enable DNS response caching. |
+
+### `[web]`
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `listen` | string \| list | `["0.0.0.0:9853", "[::]:9853"]` | Addresses for the HTTP web dashboard. |
+| `https_listen` | string \| list | `["0.0.0.0:9854", "[::]:9854"]` | Addresses for the HTTPS web dashboard. Added automatically on first run if missing. |
+| `auto_redirect_https` | bool | `false` | Redirect HTTP requests to HTTPS automatically. |
+| `trust_forwarded_proto` | bool | `false` | Trust the `X-Forwarded-Proto` header from a reverse proxy. **Only enable if oxi-dns is behind a trusted TLS-terminating proxy** — otherwise attackers can spoof the header. See [HTTPS & Reverse Proxy](#https--reverse-proxy). |
+
+### `[blocking]`
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `enabled` | bool | `true` | Master switch for ad/tracker blocking. |
+| `blocklists` | list | `[]` | URLs or file paths of blocklists to load (hosts-format or domain-list). |
+| `custom_blocked` | list | `[]` | Manually blocked domains. |
+| `allowlist` | list | `[]` | Domains that bypass blocking. |
+| `update_interval_minutes` | integer | `60` | How often to refresh blocklists. `0` disables auto-refresh. |
+| `enabled_features` | list | `[]` | Feature IDs to restore on restart (e.g. `"safe_search"`, `"root_servers"`). Managed by the dashboard. |
+| `blocking_mode` | table | `{ mode = "Default" }` | How blocked domains are answered. See blocking modes below. |
+
+**Blocking modes** (`blocking_mode.mode`):
+
+| Mode | Response | Description |
+|------|----------|-------------|
+| `Default` | `0.0.0.0` / `::` | Adblock-style null response. Hosts-file entries use the IP from the rule. |
+| `Refused` | REFUSED rcode | Tell the client the query was refused. |
+| `NxDomain` | NXDOMAIN rcode | Tell the client the domain doesn't exist. |
+| `NullIp` | `0.0.0.0` / `::` | Always respond with null IPs regardless of rule source. |
+| `CustomIp` | user-defined | Respond with custom IPs. Requires `value = { ipv4 = "...", ipv6 = "..." }`. |
+
+Example custom IP blocking mode:
+```toml
+[blocking.blocking_mode]
+mode = "CustomIp"
+value = { ipv4 = "192.168.1.100", ipv6 = "::1" }
+```
+
+### `[tls]`
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `cert_path` | string | *not set* | Path to a PEM certificate file. If omitted, a self-signed certificate is generated at startup covering `localhost`, `oxi-dns.local`, and all interface IPs. |
+| `key_path` | string | *not set* | Path to a PEM private key file. Must be set together with `cert_path`. |
+
+### `[tls.acme]`
+
+Automatic certificate management via Let's Encrypt (or compatible CA).
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `enabled` | bool | `false` | Enable ACME certificate issuance and auto-renewal. |
+| `domain` | string | `""` | Domain to issue the certificate for (e.g. `"dns.example.com"` or `"*.example.com"`). |
+| `email` | string | `""` | Contact email for the ACME account. |
+| `provider` | string | `"cloudflare"` | DNS challenge provider. `"cloudflare"` for automatic DNS-01 via Cloudflare API, or `"manual"` to create TXT records yourself. |
+| `cloudflare_api_token` | string | `""` | Cloudflare API token (required when `provider = "cloudflare"`). Must have DNS edit permissions for the zone. |
+| `use_staging` | bool | `false` | Use the Let's Encrypt staging environment for testing (avoids rate limits). |
+
+### `[system]`
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `auto_update` | bool | `false` | Automatically check for and apply updates. Updates are health-checked before applying. |
+| `ipv6_enabled` | bool | `true` | Include AAAA (IPv6) records in DNS responses. |
+| `release_channel` | string | `"stable"` | Release channel for updates. `"stable"` or `"beta"`. |
+
+### `[log]`
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `query_log_retention_days` | integer | `7` | Days to keep query log entries before automatic cleanup. |
+| `stats_retention_days` | integer | `90` | Days to keep historical statistics. |
+| `anonymize_client_ip` | bool | `false` | Anonymize client IPs in the query log (e.g. `192.168.1.100` becomes `192.168.1.0`). |
+
+### Full example
+
+A fully-populated `config.toml` for reference (all values shown are defaults unless noted):
+
+```toml
+[dns]
+listen = ["0.0.0.0:53", "[::]:53"]
+# dot_listen = ["0.0.0.0:853", "[::]:853"]
+# doh_listen = ["0.0.0.0:443", "[::]:443"]
+# doq_listen = ["0.0.0.0:853", "[::]:853"]
+upstreams = [
+    "tls://9.9.9.9:853",
+    "tls://1.1.1.1:853",
+]
+timeout_ms = 5000
+cache_enabled = true
+
+[web]
+listen = ["0.0.0.0:9853", "[::]:9853"]
+https_listen = ["0.0.0.0:9854", "[::]:9854"]
+auto_redirect_https = false
+trust_forwarded_proto = false
+
+[blocking]
+enabled = true
+blocklists = []
+custom_blocked = []
+allowlist = []
+update_interval_minutes = 60
+enabled_features = []
+
+[blocking.blocking_mode]
+mode = "Default"
+
+[tls]
+# cert_path = "/etc/oxi-dns/cert.pem"
+# key_path = "/etc/oxi-dns/key.pem"
+
+# [tls.acme]
+# enabled = true
+# domain = "dns.example.com"
+# email = "you@example.com"
+# provider = "cloudflare"
+# cloudflare_api_token = "your-token-here"
+
+[system]
+auto_update = false
+ipv6_enabled = true
+release_channel = "stable"
+
+[log]
+query_log_retention_days = 7
+stats_retention_days = 90
+anonymize_client_ip = false
+```
 
 ## Command-line options
 
@@ -954,7 +1092,6 @@ Bug reports, feature requests, and pull requests are welcome. Open an issue on G
 Please note that this list is not a promise, rather thoughts I might change my mind on in the future. Feel free to share your opinion and suggestions for the future of this project.
 
 ### Goals for Version 1:
-- Verify DNS over QUIC work (feature)
 - when query logs;
   - Add a toggle to enable/disable query logging
   - some users might want to keep query logging for a less than a day. (e.g. 12 hours)
@@ -967,7 +1104,6 @@ Please note that this list is not a promise, rather thoughts I might change my m
 - in addition, harden DoH, DoT and DoQ (feature) (pathing attacks, etc)
 - Verify that changing Settings in the UI (Like Port or listen address) works with the generated terminal commands. (ipv4 yes, ipv6 has to be fixed)
 - add a warning for cloudflare users, that the proxy should be disabled for oxi-dns to work properly. 
-- the oxi-dns command should be able to do everything the UI can do. (feature)
 - the oxi-dns command should be able to signal to the web UI that the config has changed and the UI should reload the config. (feature)
 - test the container images
 
@@ -979,6 +1115,7 @@ Please note that this list is not a promise, rather thoughts I might change my m
   - DNSsec
   - DNScrypt
   - Rate limits for clients
+  - DDoS protection
   - no DNAME, no EDNS0, sequential server tries within a single referral
    step, and glueless-NS resolution reuses the bootstrap walker which itself  
   only handles glued chains.
@@ -993,6 +1130,14 @@ Please note that this list is not a promise, rather thoughts I might change my m
 - make the log entries clickable and show more information about the query
 - sort logs by ...
 - dns rewrites
+- ability to disable the Web UI (feature)
+  - including all the feaures that are not essential for the DNS server to run. (like statistics, logs, etc.)
+  - this should be done in a way that the server can still run without the Web UI.
+  - the Web UI should be able to be started and stopped independently of the DNS server.
+- ability to disable the API (feature)
+  - including all the feaures that are not essential for the DNS server to run. (like statistics, logs, etc.)
+  - this should be done in a way that the server can still run without the API.
+  - the API should be able to be started and stopped independently of the DNS server.
 
 ### Stuff that might be done
 - Look into RFC Compliance
