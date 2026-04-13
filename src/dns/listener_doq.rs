@@ -145,10 +145,10 @@ async fn handle_doq_stream(
 
     // Some clients (e.g. kdig) send a 2-byte TCP-style length prefix even
     // though RFC 9250 §4.2 says QUIC streams don't need one.  Detect and
-    // strip it: if the first two bytes, read as a big-endian u16, equal the
-    // remaining length of the buffer, they're a length prefix, not the DNS
-    // message ID.
+    // strip it so the DNS parser sees a clean message.  We remember whether
+    // the client used one so we can mirror it in the response.
     let mut msg_buf = msg_buf;
+    let mut client_used_length_prefix = false;
     if msg_buf.len() >= 14 {
         let maybe_len = u16::from_be_bytes([msg_buf[0], msg_buf[1]]) as usize;
         if maybe_len == msg_buf.len() - 2 {
@@ -157,12 +157,19 @@ async fn handle_doq_stream(
                 client_ip
             );
             msg_buf = msg_buf[2..].to_vec();
+            client_used_length_prefix = true;
         }
     }
 
     // RFC 9250 §4.2.1: DNS Message ID MUST be 0 over QUIC.
-    // Many clients still send non-zero IDs, so we zero it and process
-    // the query rather than rejecting it outright.
+    // Many clients still send non-zero IDs.  Save the original so we can
+    // echo it back (clients like kdig need it to match the response to
+    // their query), then zero it for internal processing.
+    let original_msg_id = if msg_buf.len() >= 2 {
+        [msg_buf[0], msg_buf[1]]
+    } else {
+        [0, 0]
+    };
     if msg_buf.len() >= 2 && (msg_buf[0] != 0 || msg_buf[1] != 0) {
         debug!("DoQ: zeroing non-zero DNS Message ID from {}", client_ip);
         msg_buf[0] = 0;
@@ -194,14 +201,21 @@ async fn handle_doq_stream(
         }
     };
 
-    // RFC 9250 §4.2.1: response Message ID MUST also be 0
+    // Restore the original message ID so the client can correlate the
+    // response to its query.  RFC 9250 says both MUST be 0, but clients
+    // that send non-zero IDs expect the same ID back.
     let mut response = response;
     if response.len() >= 2 {
-        response[0] = 0;
-        response[1] = 0;
+        response[0] = original_msg_id[0];
+        response[1] = original_msg_id[1];
     }
 
-    // DoQ: write DNS message directly, no length prefix
+    // If the client sent a TCP-style length prefix, include one in the
+    // response so the client can parse it the same way it framed the query.
+    if client_used_length_prefix {
+        let len = (response.len() as u16).to_be_bytes();
+        send.write_all(&len).await?;
+    }
     send.write_all(&response).await?;
     send.finish()?;
 
