@@ -1,9 +1,39 @@
 use chrono::Utc;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
+use std::net::Ipv4Addr;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{info, warn};
+
+/// Kind of external list an operator can subscribe to.  Every external URL
+/// (whether added manually or attached to a feature toggle) has one of
+/// these three roles.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Hash)]
+#[serde(rename_all = "lowercase")]
+pub enum SourceKind {
+    /// Each line is a domain to block.
+    Block,
+    /// Each line is a domain to always allow (bypasses blocking).
+    Allow,
+    /// AdGuard-format DNS rewrite rules (CNAME/A rewrites used by
+    /// safe-search, YouTube restricted mode, etc.).
+    Rewrite,
+}
+
+/// One configured external list.  Stored in `[blocking].sources` in the TOML.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SourceEntry {
+    pub url: String,
+    pub kind: SourceKind,
+}
+
+/// Target of a DNS rewrite rule.  Previously lived in `features::SafeSearchTarget`.
+#[derive(Debug, Clone)]
+pub enum RewriteTarget {
+    A(Ipv4Addr),
+    Cname(String),
+}
 
 /// Result of checking whether a domain is blocked.
 #[derive(Debug, Clone, PartialEq)]
@@ -16,21 +46,28 @@ pub enum BlockResult {
     BlockedCustom,
 }
 
-/// Manages the set of blocked domains loaded from blocklists, custom entries, and allowlist.
+/// Manages the full set of externally-sourced lists — blocklists,
+/// allowlists, and DNS rewrite rules — plus manually-entered entries.
 #[derive(Clone)]
 pub struct BlocklistManager {
-    /// All blocked domains (lowercase, normalized)
+    /// All blocked domains (lowercase, normalized), merged from Block-kind
+    /// sources + `custom_blocked`.
     blocked: Arc<RwLock<HashSet<String>>>,
-    /// Domains loaded per source URL (for add/remove support)
+    /// Domains loaded per Block-kind source URL (for add/remove support).
     source_domains: Arc<RwLock<HashMap<String, HashSet<String>>>>,
-    /// Custom blocked domains (manually added)
+    /// Domains loaded per Allow-kind source URL (URL-sourced allowlist).
+    source_allowlist: Arc<RwLock<HashMap<String, HashSet<String>>>>,
+    /// Rewrite rules aggregated from all Rewrite-kind sources. Value holds
+    /// the rewrite target + the originating source URL so removal works.
+    rewrite_rules: Arc<RwLock<HashMap<String, (RewriteTarget, String)>>>,
+    /// Custom blocked domains (manually added — single source, no URL).
     custom_blocked: Arc<RwLock<HashSet<String>>>,
-    /// Allowlisted domains that bypass blocking
+    /// Manual allowlist domains; combined with `source_allowlist` at check time.
     allowlist: Arc<RwLock<HashSet<String>>>,
     /// Whether blocking is globally enabled
     enabled: Arc<RwLock<bool>>,
-    /// Blocklist source URLs/paths
-    sources: Arc<RwLock<Vec<String>>>,
+    /// Configured external list sources (URL + kind).
+    sources: Arc<RwLock<Vec<SourceEntry>>>,
     /// Timestamp of the last completed refresh (manual or auto)
     last_refreshed_at: Arc<RwLock<Option<chrono::DateTime<chrono::Utc>>>>,
     /// Whether a refresh is currently in progress (concurrency guard)
@@ -66,6 +103,8 @@ impl BlocklistManager {
         Self {
             blocked: Arc::new(RwLock::new(HashSet::new())),
             source_domains: Arc::new(RwLock::new(HashMap::new())),
+            source_allowlist: Arc::new(RwLock::new(HashMap::new())),
+            rewrite_rules: Arc::new(RwLock::new(HashMap::new())),
             custom_blocked: Arc::new(RwLock::new(HashSet::new())),
             allowlist: Arc::new(RwLock::new(HashSet::new())),
             enabled: Arc::new(RwLock::new(enabled)),
@@ -75,184 +114,271 @@ impl BlocklistManager {
         }
     }
 
-    /// Load blocklists from URLs/file paths, plus custom blocked/allowed domains.
+    /// Load all typed external sources + manual entries at startup.
     pub async fn load(
         &self,
-        blocklist_urls: &[String],
+        sources: &[SourceEntry],
         custom_blocked: &[String],
         allowlist: &[String],
     ) {
-        let mut all_domains = HashSet::new();
-        let mut src_map = HashMap::new();
+        let mut blocked_all = HashSet::new();
+        let mut block_src = HashMap::new();
+        let mut allow_src: HashMap<String, HashSet<String>> = HashMap::new();
+        let mut rewrite_rules: HashMap<String, (RewriteTarget, String)> = HashMap::new();
 
-        for source in blocklist_urls {
-            match self.fetch_blocklist(source).await {
-                Ok(entries) => {
-                    info!("Loaded {} entries from {}", entries.len(), source);
-                    let set: HashSet<String> = entries.into_iter().collect();
-                    all_domains.extend(set.clone());
-                    src_map.insert(source.clone(), set);
+        for source in sources {
+            match self.fetch_source(source).await {
+                Ok(FetchedSource::Block(domains)) => {
+                    info!("Loaded {} block entries from {}", domains.len(), source.url);
+                    blocked_all.extend(domains.iter().cloned());
+                    block_src.insert(source.url.clone(), domains);
+                }
+                Ok(FetchedSource::Allow(domains)) => {
+                    info!("Loaded {} allow entries from {}", domains.len(), source.url);
+                    allow_src.insert(source.url.clone(), domains);
+                }
+                Ok(FetchedSource::Rewrite(rules)) => {
+                    info!("Loaded {} rewrite rules from {}", rules.len(), source.url);
+                    for (domain, target) in rules {
+                        rewrite_rules.insert(domain, (target, source.url.clone()));
+                    }
                 }
                 Err(e) => {
-                    warn!("Failed to load blocklist {}: {}", source, e);
+                    warn!("Failed to load source {}: {}", source.url, e);
                 }
             }
         }
 
         let custom: HashSet<String> = custom_blocked.iter().map(|d| normalize_domain(d)).collect();
-        all_domains.extend(custom.clone());
+        blocked_all.extend(custom.clone());
 
-        info!("Total blocked domains: {}", all_domains.len());
+        info!(
+            "Sources loaded: {} block domains, {} rewrite rules",
+            blocked_all.len(),
+            rewrite_rules.len()
+        );
 
-        *self.blocked.write().await = all_domains;
-        *self.source_domains.write().await = src_map;
+        *self.blocked.write().await = blocked_all;
+        *self.source_domains.write().await = block_src;
+        *self.source_allowlist.write().await = allow_src;
+        *self.rewrite_rules.write().await = rewrite_rules;
         *self.custom_blocked.write().await = custom;
         *self.allowlist.write().await = allowlist.iter().map(|d| normalize_domain(d)).collect();
-        *self.sources.write().await = blocklist_urls.to_vec();
+        *self.sources.write().await = sources.to_vec();
     }
 
-    /// Dynamically add a blocklist source and load its domains.
-    /// Returns Ok(count) on success, Err(message) on failure.
-    pub async fn add_blocklist_source(&self, url: &str) -> Result<usize, String> {
-        // Check if already loaded
+    /// Dynamically add a source of the given kind.  Fetches, parses, and
+    /// integrates it into the appropriate internal state.
+    pub async fn add_source(&self, url: &str, kind: SourceKind) -> Result<usize, String> {
+        // Already present? Return current count.
         {
-            let src = self.source_domains.read().await;
-            if src.contains_key(url) {
-                let count = src[url].len();
-                return Ok(count);
+            let sources = self.sources.read().await;
+            if sources.iter().any(|s| s.url == url) {
+                return Ok(self.source_count(url).await);
             }
         }
 
-        match self.fetch_blocklist(url).await {
-            Ok(entries) => {
-                let count = entries.len();
-                info!("Blocklist loaded: {} entries from {}", count, url);
-                let set: HashSet<String> = entries.into_iter().collect();
-
-                // Add to blocked set
+        let entry = SourceEntry {
+            url: url.to_string(),
+            kind,
+        };
+        match self.fetch_source(&entry).await {
+            Ok(FetchedSource::Block(domains)) => {
+                let count = domains.len();
                 {
                     let mut blocked = self.blocked.write().await;
-                    blocked.extend(set.clone());
+                    blocked.extend(domains.iter().cloned());
                 }
-
-                // Track source
-                {
-                    let mut src_map = self.source_domains.write().await;
-                    src_map.insert(url.to_string(), set);
+                self.source_domains
+                    .write()
+                    .await
+                    .insert(url.to_string(), domains);
+                self.sources.write().await.push(entry);
+                Ok(count)
+            }
+            Ok(FetchedSource::Allow(domains)) => {
+                let count = domains.len();
+                self.source_allowlist
+                    .write()
+                    .await
+                    .insert(url.to_string(), domains);
+                self.sources.write().await.push(entry);
+                Ok(count)
+            }
+            Ok(FetchedSource::Rewrite(rules)) => {
+                let count = rules.len();
+                let mut all = self.rewrite_rules.write().await;
+                for (domain, target) in rules {
+                    all.insert(domain, (target, url.to_string()));
                 }
-
-                // Add to sources list
-                {
-                    let mut sources = self.sources.write().await;
-                    if !sources.contains(&url.to_string()) {
-                        sources.push(url.to_string());
-                    }
-                }
-
+                drop(all);
+                self.sources.write().await.push(entry);
                 Ok(count)
             }
             Err(e) => {
-                let msg = format!("Failed to load blocklist {}: {}", url, e);
+                let msg = format!("Failed to load source {}: {}", url, e);
                 warn!("{}", msg);
                 Err(msg)
             }
         }
     }
 
-    /// Dynamically remove a blocklist source and its domains.
-    pub async fn remove_blocklist_source(&self, url: &str) {
-        let domains_to_remove = {
-            let mut src_map = self.source_domains.write().await;
-            src_map.remove(url)
+    /// Dynamically remove a source (any kind) and its contributed state.
+    pub async fn remove_source(&self, url: &str) {
+        // Find the kind of this source before mutating.
+        let kind = {
+            let sources = self.sources.read().await;
+            sources.iter().find(|s| s.url == url).map(|s| s.kind)
+        };
+        let Some(kind) = kind else {
+            return;
         };
 
-        if let Some(domains) = domains_to_remove {
-            // Rebuild blocked set from remaining sources + custom
-            let src_map = self.source_domains.read().await;
-            let custom = self.custom_blocked.read().await;
-
-            let mut new_blocked = HashSet::new();
-            for src_domains in src_map.values() {
-                new_blocked.extend(src_domains.clone());
+        match kind {
+            SourceKind::Block => {
+                let domains = self.source_domains.write().await.remove(url);
+                if let Some(removed) = domains {
+                    let src_map = self.source_domains.read().await;
+                    let custom = self.custom_blocked.read().await;
+                    let mut new_blocked: HashSet<String> = HashSet::new();
+                    for set in src_map.values() {
+                        new_blocked.extend(set.iter().cloned());
+                    }
+                    new_blocked.extend(custom.iter().cloned());
+                    let n = removed.len();
+                    *self.blocked.write().await = new_blocked;
+                    info!("Removed block source {}: -{} domains", url, n);
+                }
             }
-            new_blocked.extend(custom.clone());
-
-            let removed = domains.len();
-            let new_total = new_blocked.len();
-            *self.blocked.write().await = new_blocked;
-
-            // Remove from sources list
-            {
-                let mut sources = self.sources.write().await;
-                sources.retain(|s| s != url);
+            SourceKind::Allow => {
+                let removed = self.source_allowlist.write().await.remove(url);
+                if let Some(set) = removed {
+                    info!("Removed allow source {}: -{} domains", url, set.len());
+                }
             }
-
-            info!(
-                "Removed blocklist {}: -{} domains, {} total remaining",
-                url, removed, new_total
-            );
+            SourceKind::Rewrite => {
+                let mut rules = self.rewrite_rules.write().await;
+                let before = rules.len();
+                rules.retain(|_, (_, owner)| owner != url);
+                let after = rules.len();
+                info!("Removed rewrite source {}: -{} rules", url, before - after);
+            }
         }
+
+        self.sources.write().await.retain(|s| s.url != url);
     }
 
-    /// Fetch and parse a blocklist from a URL or local file path.
-    /// Applies per-source `@@` exceptions before returning, so callers
-    /// only see the final filtered domain list.
-    async fn fetch_blocklist(&self, source: &str) -> anyhow::Result<Vec<String>> {
+    /// How many items a given source currently contributes (for UI / API).
+    async fn source_count(&self, url: &str) -> usize {
+        if let Some(set) = self.source_domains.read().await.get(url) {
+            return set.len();
+        }
+        if let Some(set) = self.source_allowlist.read().await.get(url) {
+            return set.len();
+        }
+        self.rewrite_rules
+            .read()
+            .await
+            .values()
+            .filter(|(_, owner)| owner == url)
+            .count()
+    }
+
+    /// Look up a rewrite target for a domain.  Returns None if no rule
+    /// applies or blocking is globally disabled.
+    pub async fn get_rewrite_target(&self, domain: &str) -> Option<(RewriteTarget, String)> {
+        if !*self.enabled.read().await {
+            return None;
+        }
+        let normalized = normalize_domain(domain);
+        let rules = self.rewrite_rules.read().await;
+        rules.get(&normalized).cloned()
+    }
+
+    /// Download the body for a source URL (or read from disk for file paths),
+    /// capped by the `blocklist_max_bytes` resource limit.
+    async fn fetch_raw(source: &str) -> anyhow::Result<String> {
         let max_bytes = crate::resources::limits().blocklist_max_bytes;
-        let content = if source.starts_with("http://") || source.starts_with("https://") {
+        if source.starts_with("http://") || source.starts_with("https://") {
             let client = reqwest::Client::new();
             let resp = client
                 .get(source)
                 .header("Cache-Control", "no-cache")
                 .send()
                 .await?;
-            // Fast fail on oversized lists when Content-Length is present.
             if let Some(len) = resp.content_length() {
                 if len as usize > max_bytes {
                     anyhow::bail!(
-                        "Blocklist {} refused: Content-Length {} bytes exceeds limit {} bytes",
+                        "Source {} refused: Content-Length {} bytes exceeds limit {} bytes",
                         source,
                         len,
                         max_bytes
                     );
                 }
             }
-            // Stream chunk-by-chunk and cap in-memory accumulation so
-            // servers that omit Content-Length — or lie about it — still
-            // can't OOM us.
             let mut resp = resp;
             let mut buf: Vec<u8> = Vec::new();
             while let Some(chunk) = resp.chunk().await? {
                 if buf.len() + chunk.len() > max_bytes {
                     anyhow::bail!(
-                        "Blocklist {} refused: exceeded size limit of {} bytes",
+                        "Source {} refused: exceeded size limit of {} bytes",
                         source,
                         max_bytes
                     );
                 }
                 buf.extend_from_slice(&chunk);
             }
-            String::from_utf8(buf)?
+            Ok(String::from_utf8(buf)?)
         } else {
             let meta = tokio::fs::metadata(source).await?;
             if meta.len() as usize > max_bytes {
                 anyhow::bail!(
-                    "Blocklist {} refused: file size {} bytes exceeds limit {} bytes",
+                    "Source {} refused: file size {} bytes exceeds limit {} bytes",
                     source,
                     meta.len(),
                     max_bytes
                 );
             }
-            tokio::fs::read_to_string(source).await?
-        };
+            Ok(tokio::fs::read_to_string(source).await?)
+        }
+    }
 
-        let parsed = parse_blocklist(&content);
-        let domains = parsed
-            .blocked
-            .into_iter()
-            .filter(|d| !parsed.exceptions.contains(d))
-            .collect();
-        Ok(domains)
+    /// Fetch + parse a typed source.  Returns typed output so callers can
+    /// route it to the right internal structure.
+    async fn fetch_source(&self, source: &SourceEntry) -> anyhow::Result<FetchedSource> {
+        let content = Self::fetch_raw(&source.url).await?;
+        match source.kind {
+            SourceKind::Block => {
+                let parsed = parse_blocklist(&content);
+                let domains: HashSet<String> = parsed
+                    .blocked
+                    .into_iter()
+                    .filter(|d| !parsed.exceptions.contains(d))
+                    .collect();
+                Ok(FetchedSource::Block(domains))
+            }
+            SourceKind::Allow => {
+                // Same host-list format as blocklists; entries become allow rules.
+                let parsed = parse_blocklist(&content);
+                let domains: HashSet<String> = parsed.blocked.into_iter().collect();
+                Ok(FetchedSource::Allow(domains))
+            }
+            SourceKind::Rewrite => {
+                let mut rules = parse_rewrite_rules(&content);
+                // The upstream AdGuard list covers www.youtube.com but not the
+                // bare youtube.com domain — browsers hitting youtube.com would
+                // otherwise bypass the rewrite.  Inject the bare domain here
+                // so the behavior is self-contained to this source.
+                if source.url.contains("youtube_safe_search") {
+                    for domain in ["youtube.com", "youtubekids.com", "www.youtubekids.com"] {
+                        rules.entry(domain.to_string()).or_insert_with(|| {
+                            RewriteTarget::Cname("restrictmoderate.youtube.com".to_string())
+                        });
+                    }
+                }
+                Ok(FetchedSource::Rewrite(rules))
+            }
+        }
     }
 
     /// Check if a domain is blocked and return which source caused it.
@@ -262,17 +388,21 @@ impl BlocklistManager {
         }
 
         let normalized = normalize_domain(domain);
-        let allowlist = self.allowlist.read().await;
 
-        // Check exact match and parent domains against the allowlist
-        if allowlist.contains(&normalized) {
-            return BlockResult::Allowed;
-        }
-        let parts: Vec<&str> = normalized.split('.').collect();
-        for i in 1..parts.len().saturating_sub(1) {
-            let parent = parts[i..].join(".");
-            if allowlist.contains(&parent) {
+        // Manual allowlist takes precedence over every block source.
+        {
+            let allowlist = self.allowlist.read().await;
+            if Self::matches_self_or_parent(&allowlist, &normalized) {
                 return BlockResult::Allowed;
+            }
+        }
+        // URL-sourced allowlists (Allow-kind subscriptions) likewise win.
+        {
+            let allow_src = self.source_allowlist.read().await;
+            for set in allow_src.values() {
+                if Self::matches_self_or_parent(set, &normalized) {
+                    return BlockResult::Allowed;
+                }
             }
         }
 
@@ -330,85 +460,160 @@ impl BlocklistManager {
         self.blocked.read().await.len()
     }
 
-    pub async fn get_sources(&self) -> Vec<String> {
+    pub async fn get_sources(&self) -> Vec<SourceEntry> {
         self.sources.read().await.clone()
     }
 
-    /// Re-fetch all current blocklist sources and rebuild the blocked set.
+    /// Helper: does `name` (exactly) or any of its parent domains appear in `set`?
+    fn matches_self_or_parent(set: &HashSet<String>, name: &str) -> bool {
+        if set.contains(name) {
+            return true;
+        }
+        let parts: Vec<&str> = name.split('.').collect();
+        for i in 1..parts.len().saturating_sub(1) {
+            let parent = parts[i..].join(".");
+            if set.contains(&parent) {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Re-fetch every configured source (all three kinds) and rebuild the
+    /// aggregate state.  Keeps the old per-source data for any entry that
+    /// fails to re-fetch so an upstream outage doesn't blank blocking.
     pub async fn refresh_sources(&self) {
         let sources = self.sources.read().await.clone();
         if sources.is_empty() {
             return;
         }
-
-        // Skip if another refresh is already running
         if !self.try_start_refresh() {
-            info!("Blocklist refresh skipped — another refresh is in progress");
+            info!("Sources refresh skipped — another refresh is in progress");
             return;
         }
 
-        info!("Refreshing {} blocklist sources...", sources.len());
+        info!("Refreshing {} sources...", sources.len());
 
-        let mut new_src_map = HashMap::new();
-        let mut all_domains = HashSet::new();
+        let mut block_src: HashMap<String, HashSet<String>> = HashMap::new();
+        let mut allow_src: HashMap<String, HashSet<String>> = HashMap::new();
+        let mut rewrite_rules: HashMap<String, (RewriteTarget, String)> = HashMap::new();
 
         for source in &sources {
-            match self.fetch_blocklist(source).await {
-                Ok(entries) => {
-                    info!("Refreshed {} entries from {}", entries.len(), source);
-                    let set: HashSet<String> = entries.into_iter().collect();
-                    all_domains.extend(set.clone());
-                    new_src_map.insert(source.clone(), set);
+            match self.fetch_source(source).await {
+                Ok(FetchedSource::Block(domains)) => {
+                    info!(
+                        "Refreshed {} block entries from {}",
+                        domains.len(),
+                        source.url
+                    );
+                    block_src.insert(source.url.clone(), domains);
+                }
+                Ok(FetchedSource::Allow(domains)) => {
+                    info!(
+                        "Refreshed {} allow entries from {}",
+                        domains.len(),
+                        source.url
+                    );
+                    allow_src.insert(source.url.clone(), domains);
+                }
+                Ok(FetchedSource::Rewrite(rules)) => {
+                    info!(
+                        "Refreshed {} rewrite rules from {}",
+                        rules.len(),
+                        source.url
+                    );
+                    for (domain, target) in rules {
+                        rewrite_rules.insert(domain, (target, source.url.clone()));
+                    }
                 }
                 Err(e) => {
-                    warn!("Failed to refresh blocklist {}: {}", source, e);
-                    let existing = self.source_domains.read().await;
-                    if let Some(existing_set) = existing.get(source) {
-                        all_domains.extend(existing_set.clone());
-                        new_src_map.insert(source.clone(), existing_set.clone());
+                    warn!("Failed to refresh source {}: {}", source.url, e);
+                    // Preserve the previous per-source data on failure.
+                    match source.kind {
+                        SourceKind::Block => {
+                            if let Some(existing) =
+                                self.source_domains.read().await.get(&source.url)
+                            {
+                                block_src.insert(source.url.clone(), existing.clone());
+                            }
+                        }
+                        SourceKind::Allow => {
+                            if let Some(existing) =
+                                self.source_allowlist.read().await.get(&source.url)
+                            {
+                                allow_src.insert(source.url.clone(), existing.clone());
+                            }
+                        }
+                        SourceKind::Rewrite => {
+                            let existing = self.rewrite_rules.read().await;
+                            for (domain, (target, owner)) in existing.iter() {
+                                if owner == &source.url {
+                                    rewrite_rules
+                                        .insert(domain.clone(), (target.clone(), owner.clone()));
+                                }
+                            }
+                        }
                     }
                 }
             }
         }
 
+        let mut blocked_all: HashSet<String> = HashSet::new();
+        for set in block_src.values() {
+            blocked_all.extend(set.iter().cloned());
+        }
         let custom = self.custom_blocked.read().await;
-        all_domains.extend(custom.clone());
+        blocked_all.extend(custom.iter().cloned());
 
-        let total = all_domains.len();
-        *self.source_domains.write().await = new_src_map;
-        *self.blocked.write().await = all_domains;
+        let total = blocked_all.len();
+        *self.source_domains.write().await = block_src;
+        *self.source_allowlist.write().await = allow_src;
+        *self.rewrite_rules.write().await = rewrite_rules;
+        *self.blocked.write().await = blocked_all;
 
         self.finish_refresh().await;
 
-        info!(
-            "Blocklist refresh complete: {} total blocked domains",
-            total
-        );
+        info!("Sources refresh complete: {} total blocked domains", total);
     }
 
-    /// Re-fetch all blocklist sources, sending progress events through the channel.
+    /// Re-fetch all sources, streaming progress events through the channel.
     /// Caller must have already acquired the refresh lock via `try_start_refresh()`.
     pub async fn refresh_sources_streaming(&self, tx: tokio::sync::mpsc::Sender<RefreshEvent>) {
         let sources = self.sources.read().await.clone();
 
         let total = sources.len();
-        let mut new_src_map = HashMap::new();
-        let mut all_domains = HashSet::new();
+        let mut block_src: HashMap<String, HashSet<String>> = HashMap::new();
+        let mut allow_src: HashMap<String, HashSet<String>> = HashMap::new();
+        let mut rewrite_rules: HashMap<String, (RewriteTarget, String)> = HashMap::new();
         let mut sources_ok: usize = 0;
         let mut sources_failed: usize = 0;
 
         for (i, source) in sources.iter().enumerate() {
-            match self.fetch_blocklist(source).await {
-                Ok(entries) => {
-                    let count = entries.len();
-                    info!("Refreshed {} entries from {}", count, source);
-                    let set: HashSet<String> = entries.into_iter().collect();
-                    all_domains.extend(set.clone());
-                    new_src_map.insert(source.clone(), set);
+            match self.fetch_source(source).await {
+                Ok(fetched) => {
+                    let count = match &fetched {
+                        FetchedSource::Block(d) => d.len(),
+                        FetchedSource::Allow(d) => d.len(),
+                        FetchedSource::Rewrite(r) => r.len(),
+                    };
+                    info!("Refreshed {} entries from {}", count, source.url);
+                    match fetched {
+                        FetchedSource::Block(d) => {
+                            block_src.insert(source.url.clone(), d);
+                        }
+                        FetchedSource::Allow(d) => {
+                            allow_src.insert(source.url.clone(), d);
+                        }
+                        FetchedSource::Rewrite(rules) => {
+                            for (domain, target) in rules {
+                                rewrite_rules.insert(domain, (target, source.url.clone()));
+                            }
+                        }
+                    }
                     sources_ok += 1;
                     let _ = tx
                         .send(RefreshEvent::Progress {
-                            source: source.clone(),
+                            source: source.url.clone(),
                             index: i + 1,
                             total,
                             status: "ok".to_string(),
@@ -418,16 +623,37 @@ impl BlocklistManager {
                         .await;
                 }
                 Err(e) => {
-                    warn!("Failed to refresh blocklist {}: {}", source, e);
-                    let existing = self.source_domains.read().await;
-                    if let Some(existing_set) = existing.get(source) {
-                        all_domains.extend(existing_set.clone());
-                        new_src_map.insert(source.clone(), existing_set.clone());
+                    warn!("Failed to refresh source {}: {}", source.url, e);
+                    // Preserve old data for this source.
+                    match source.kind {
+                        SourceKind::Block => {
+                            if let Some(existing) =
+                                self.source_domains.read().await.get(&source.url)
+                            {
+                                block_src.insert(source.url.clone(), existing.clone());
+                            }
+                        }
+                        SourceKind::Allow => {
+                            if let Some(existing) =
+                                self.source_allowlist.read().await.get(&source.url)
+                            {
+                                allow_src.insert(source.url.clone(), existing.clone());
+                            }
+                        }
+                        SourceKind::Rewrite => {
+                            let existing = self.rewrite_rules.read().await;
+                            for (domain, (target, owner)) in existing.iter() {
+                                if owner == &source.url {
+                                    rewrite_rules
+                                        .insert(domain.clone(), (target.clone(), owner.clone()));
+                                }
+                            }
+                        }
                     }
                     sources_failed += 1;
                     let _ = tx
                         .send(RefreshEvent::Progress {
-                            source: source.clone(),
+                            source: source.url.clone(),
                             index: i + 1,
                             total,
                             status: "error".to_string(),
@@ -439,12 +665,18 @@ impl BlocklistManager {
             }
         }
 
+        let mut blocked_all: HashSet<String> = HashSet::new();
+        for set in block_src.values() {
+            blocked_all.extend(set.iter().cloned());
+        }
         let custom = self.custom_blocked.read().await;
-        all_domains.extend(custom.clone());
+        blocked_all.extend(custom.iter().cloned());
 
-        let total_domains = all_domains.len();
-        *self.source_domains.write().await = new_src_map;
-        *self.blocked.write().await = all_domains;
+        let total_domains = blocked_all.len();
+        *self.source_domains.write().await = block_src;
+        *self.source_allowlist.write().await = allow_src;
+        *self.rewrite_rules.write().await = rewrite_rules;
+        *self.blocked.write().await = blocked_all;
 
         let now = Utc::now();
         *self.last_refreshed_at.write().await = Some(now);
@@ -462,7 +694,7 @@ impl BlocklistManager {
             .await;
 
         info!(
-            "Blocklist refresh complete: {} total blocked domains",
+            "Sources refresh complete: {} total blocked domains",
             total_domains
         );
     }
@@ -528,6 +760,50 @@ impl BlocklistManager {
 
 fn normalize_domain(domain: &str) -> String {
     domain.to_lowercase().trim_end_matches('.').to_string()
+}
+
+/// Internal result of a typed fetch.
+enum FetchedSource {
+    Block(HashSet<String>),
+    Allow(HashSet<String>),
+    Rewrite(HashMap<String, RewriteTarget>),
+}
+
+/// Parse AdGuard DNS rewrite rules into a domain→target map.
+/// Format: `|domain.com^$dnsrewrite=NOERROR;CNAME;target.com`
+///     or: `|domain.com^$dnsrewrite=NOERROR;A;1.2.3.4`
+/// Lines that don't match are silently skipped.
+fn parse_rewrite_rules(content: &str) -> HashMap<String, RewriteTarget> {
+    let mut rules = HashMap::new();
+    for line in content.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') || line.starts_with('!') {
+            continue;
+        }
+        let line = match line.strip_prefix('|') {
+            Some(l) => l,
+            None => continue,
+        };
+        let (domain_part, rewrite_part) = match line.split_once("^$dnsrewrite=NOERROR;") {
+            Some(parts) => parts,
+            None => continue,
+        };
+        let domain = domain_part.to_lowercase();
+        let parts: Vec<&str> = rewrite_part.splitn(2, ';').collect();
+        if parts.len() != 2 {
+            continue;
+        }
+        let target = match parts[0] {
+            "A" => match parts[1].parse::<Ipv4Addr>() {
+                Ok(ip) => RewriteTarget::A(ip),
+                Err(_) => continue,
+            },
+            "CNAME" => RewriteTarget::Cname(parts[1].to_string()),
+            _ => continue,
+        };
+        rules.insert(domain, target);
+    }
+    rules
 }
 
 /// Result of parsing a blocklist file.

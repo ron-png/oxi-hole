@@ -181,9 +181,15 @@ pub struct BlockingConfig {
     /// Whether blocking is enabled
     #[serde(default = "default_true")]
     pub enabled: bool,
-    /// Blocklist URLs or file paths
+    /// Legacy: block-only URL list. Kept for back-compat with hand-edited
+    /// configs; auto-migrated to `sources` (with kind = block) at first
+    /// load and cleared on next save.
     #[serde(default)]
     pub blocklists: Vec<String>,
+    /// Canonical list of external URL sources: blocklists, URL-sourced
+    /// allowlists, and DNS-rewrite lists (AdGuard format).
+    #[serde(default)]
+    pub sources: Vec<crate::blocklist::SourceEntry>,
     /// Manually blocked domains
     #[serde(default)]
     pub custom_blocked: Vec<String>,
@@ -438,6 +444,7 @@ impl Default for BlockingConfig {
         Self {
             enabled: true,
             blocklists: Vec::new(),
+            sources: Vec::new(),
             custom_blocked: Vec::new(),
             allowlist: Vec::new(),
             update_interval_minutes: default_update_interval(),
@@ -499,6 +506,84 @@ impl Config {
                     d.saturating_mul(1440)
                 );
                 changed = true;
+            }
+        }
+
+        // v0.6.9+: blocking.blocklists → blocking.sources (typed entries).
+        //
+        // Older configs stored every subscribed URL in the flat `blocklists`
+        // field.  New code uses a typed `sources` list.  URLs that match a
+        // known rewrite-feature URL migrate with kind=Rewrite so the intent
+        // survives — otherwise they'd become Block-kind and the old
+        // safe-search / YouTube toggles would stop producing rewrites.
+        if self.blocking.sources.is_empty() && !self.blocking.blocklists.is_empty() {
+            use crate::blocklist::{SourceEntry, SourceKind};
+            use crate::features::url_to_feature_id;
+
+            let (mut block_n, mut rewrite_n) = (0usize, 0usize);
+            self.blocking.sources = self
+                .blocking
+                .blocklists
+                .iter()
+                .map(|url| {
+                    // Feature URLs whose id maps to a rewrite feature
+                    // get the Rewrite kind; everything else defaults to Block.
+                    let kind = match url_to_feature_id(url) {
+                        Some("safe_search") | Some("youtube_safe_search") => {
+                            rewrite_n += 1;
+                            SourceKind::Rewrite
+                        }
+                        _ => {
+                            block_n += 1;
+                            SourceKind::Block
+                        }
+                    };
+                    SourceEntry {
+                        url: url.clone(),
+                        kind,
+                    }
+                })
+                .collect();
+            tracing::info!(
+                "Config migration: {} block + {} rewrite URLs moved from blocking.blocklists to blocking.sources",
+                block_n,
+                rewrite_n,
+            );
+            // Clear the legacy field so the next saved TOML is unambiguous.
+            self.blocking.blocklists.clear();
+            changed = true;
+        }
+
+        // v0.6.9+: defensive safety net — if a rewrite feature is in
+        // `enabled_features` but its URL is not among `sources`, inject a
+        // Rewrite-kind source for it.  Covers configs from the brief
+        // pre-refactor window where rewrite URLs weren't persisted anywhere.
+        {
+            use crate::blocklist::{SourceEntry, SourceKind};
+            use crate::features::{SAFE_SEARCH_LIST_URL, YOUTUBE_SAFE_SEARCH_LIST_URL};
+
+            let rewrites = [
+                ("safe_search", SAFE_SEARCH_LIST_URL),
+                ("youtube_safe_search", YOUTUBE_SAFE_SEARCH_LIST_URL),
+            ];
+            for (feature_id, url) in rewrites {
+                let enabled = self
+                    .blocking
+                    .enabled_features
+                    .iter()
+                    .any(|f| f == feature_id);
+                let already_present = self.blocking.sources.iter().any(|s| s.url == url);
+                if enabled && !already_present {
+                    self.blocking.sources.push(SourceEntry {
+                        url: url.to_string(),
+                        kind: SourceKind::Rewrite,
+                    });
+                    tracing::info!(
+                        "Config migration: added rewrite source for enabled feature '{}'",
+                        feature_id
+                    );
+                    changed = true;
+                }
             }
         }
 
@@ -598,5 +683,168 @@ listen = ["0.0.0.0:9853"]
 "#;
         let cfg: WebConfig = toml::from_str(toml_str).expect("parse");
         assert!(!cfg.trust_forwarded_proto);
+    }
+}
+
+#[cfg(test)]
+mod migration_tests {
+    use super::*;
+    use crate::blocklist::SourceKind;
+    use crate::features::{SAFE_SEARCH_LIST_URL, YOUTUBE_SAFE_SEARCH_LIST_URL};
+
+    fn parse_and_migrate(toml_str: &str) -> (Config, bool) {
+        let mut cfg: Config = toml::from_str(toml_str).expect("parse old config");
+        let raw: toml::Value = toml::from_str(toml_str).expect("parse raw");
+        let changed = cfg.migrate(&raw);
+        (cfg, changed)
+    }
+
+    #[test]
+    fn migrates_plain_blocklists_to_block_sources() {
+        let old = r#"
+[blocking]
+blocklists = ["https://example.com/ads.txt", "https://example.com/malware.txt"]
+"#;
+        let (cfg, changed) = parse_and_migrate(old);
+        assert!(changed);
+        assert_eq!(cfg.blocking.sources.len(), 2);
+        assert!(cfg
+            .blocking
+            .sources
+            .iter()
+            .all(|s| s.kind == SourceKind::Block));
+        // Legacy field cleared.
+        assert!(cfg.blocking.blocklists.is_empty());
+    }
+
+    #[test]
+    fn migrates_feature_rewrite_urls_with_correct_kind() {
+        // Pre-refactor configs never put rewrite URLs in `blocklists`, but be
+        // defensive: if one slipped in, migrate it as Rewrite, not Block.
+        let old = format!(
+            r#"
+[blocking]
+blocklists = ["{safe}", "{youtube}", "https://example.com/ads.txt"]
+"#,
+            safe = SAFE_SEARCH_LIST_URL,
+            youtube = YOUTUBE_SAFE_SEARCH_LIST_URL,
+        );
+        let (cfg, changed) = parse_and_migrate(&old);
+        assert!(changed);
+        assert_eq!(cfg.blocking.sources.len(), 3);
+
+        let safe = cfg
+            .blocking
+            .sources
+            .iter()
+            .find(|s| s.url == SAFE_SEARCH_LIST_URL)
+            .unwrap();
+        assert_eq!(safe.kind, SourceKind::Rewrite);
+
+        let yt = cfg
+            .blocking
+            .sources
+            .iter()
+            .find(|s| s.url == YOUTUBE_SAFE_SEARCH_LIST_URL)
+            .unwrap();
+        assert_eq!(yt.kind, SourceKind::Rewrite);
+
+        let ads = cfg
+            .blocking
+            .sources
+            .iter()
+            .find(|s| s.url == "https://example.com/ads.txt")
+            .unwrap();
+        assert_eq!(ads.kind, SourceKind::Block);
+    }
+
+    #[test]
+    fn injects_rewrite_source_for_enabled_safe_search() {
+        // Old configs persisted `enabled_features` but not rewrite URLs.
+        // Migration must add them so the feature still produces rewrites
+        // after restart without relying on the feature-restoration loop.
+        let old = r#"
+[blocking]
+enabled_features = ["safe_search"]
+"#;
+        let (cfg, changed) = parse_and_migrate(old);
+        assert!(changed);
+        assert_eq!(cfg.blocking.sources.len(), 1);
+        assert_eq!(cfg.blocking.sources[0].url, SAFE_SEARCH_LIST_URL);
+        assert_eq!(cfg.blocking.sources[0].kind, SourceKind::Rewrite);
+    }
+
+    #[test]
+    fn injects_both_rewrite_sources_when_both_features_enabled() {
+        let old = r#"
+[blocking]
+enabled_features = ["safe_search", "youtube_safe_search"]
+"#;
+        let (cfg, changed) = parse_and_migrate(old);
+        assert!(changed);
+        assert_eq!(cfg.blocking.sources.len(), 2);
+        assert!(cfg
+            .blocking
+            .sources
+            .iter()
+            .any(|s| s.url == SAFE_SEARCH_LIST_URL && s.kind == SourceKind::Rewrite));
+        assert!(cfg
+            .blocking
+            .sources
+            .iter()
+            .any(|s| s.url == YOUTUBE_SAFE_SEARCH_LIST_URL && s.kind == SourceKind::Rewrite));
+    }
+
+    #[test]
+    fn does_not_duplicate_rewrite_source_when_already_present() {
+        // If both `blocklists` has the rewrite URL AND `enabled_features` is
+        // set, we should still end up with exactly one Rewrite-kind source.
+        let old = format!(
+            r#"
+[blocking]
+blocklists = ["{safe}"]
+enabled_features = ["safe_search"]
+"#,
+            safe = SAFE_SEARCH_LIST_URL
+        );
+        let (cfg, changed) = parse_and_migrate(&old);
+        assert!(changed);
+        let count = cfg
+            .blocking
+            .sources
+            .iter()
+            .filter(|s| s.url == SAFE_SEARCH_LIST_URL)
+            .count();
+        assert_eq!(count, 1, "no duplicate rewrite source");
+        assert_eq!(cfg.blocking.sources[0].kind, SourceKind::Rewrite);
+    }
+
+    #[test]
+    fn new_config_shape_does_not_rewrite_sources() {
+        // Other migrations (e.g. https_listen) may still flip `changed`,
+        // but the sources list must not be touched.
+        let new = r#"
+[blocking]
+sources = [
+    { url = "https://example.com/ads.txt", kind = "block" },
+    { url = "https://example.com/safe.txt", kind = "rewrite" },
+]
+"#;
+        let (cfg, _changed) = parse_and_migrate(new);
+        assert_eq!(cfg.blocking.sources.len(), 2);
+        assert_eq!(cfg.blocking.sources[0].url, "https://example.com/ads.txt");
+        assert_eq!(cfg.blocking.sources[0].kind, SourceKind::Block);
+        assert_eq!(cfg.blocking.sources[1].url, "https://example.com/safe.txt");
+        assert_eq!(cfg.blocking.sources[1].kind, SourceKind::Rewrite);
+    }
+
+    #[test]
+    fn empty_blocking_section_leaves_sources_empty() {
+        let old = r#"
+[blocking]
+"#;
+        let (cfg, _changed) = parse_and_migrate(old);
+        assert!(cfg.blocking.sources.is_empty());
+        assert!(cfg.blocking.blocklists.is_empty());
     }
 }

@@ -139,7 +139,13 @@ pub async fn process_dns_query(
 
     // Check safe search rewriting (A and AAAA queries)
     if query_type == RecordType::A || query_type == RecordType::AAAA {
-        if let Some((target, feature_id)) = features.get_safe_search_target(domain_trimmed).await {
+        if let Some((target, source_url)) = features.get_safe_search_target(domain_trimmed).await {
+            // Map the source URL back to a known feature id for query-log
+            // attribution.  User-added rewrite lists have no mapping and
+            // fall back to "rewrite_list".
+            let feature_id = crate::features::url_to_feature_id(&source_url)
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| "rewrite_list".to_string());
             let response = match (&target, query_type) {
                 (SafeSearchTarget::A(ip), RecordType::A) => {
                     debug!("Safe search rewrite: {} -> {}", domain_trimmed, ip);
@@ -183,7 +189,7 @@ pub async fn process_dns_query(
                     client_ip: client_ip_stored,
                     status: "rewritten".to_string(),
                     block_source: None,
-                    block_feature: Some(feature_id.to_string()),
+                    block_feature: Some(feature_id.clone()),
                     response_time_ms: elapsed,
                     upstream: Some("safe-search".to_string()),
                 });

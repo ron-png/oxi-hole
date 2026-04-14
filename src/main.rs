@@ -365,10 +365,11 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
-    // Load blocklists now that DNS is available
+    // Load all external sources (block/allow/rewrite) + manual entries now
+    // that DNS is available.
     blocklist_manager
         .load(
-            &config.blocking.blocklists,
+            &config.blocking.sources,
             &config.blocking.custom_blocked,
             &config.blocking.allowlist,
         )
@@ -424,7 +425,10 @@ async fn main() -> anyhow::Result<()> {
         acme: std::sync::Arc::new(crate::acme::AcmeState::new()),
     };
 
-    // Spawn background blocklist refresh task
+    // Spawn background blocklist refresh task.  Also re-fetches the
+    // AdGuard-sourced dynamic rewrite lists (safe_search /
+    // youtube_safe_search) on the same cadence, so a single interval drives
+    // every externally-sourced list.
     {
         let bm = web_state.blocklist.clone();
         let interval_lock = web_state.blocklist_update_interval.clone();
@@ -443,6 +447,7 @@ async fn main() -> anyhow::Result<()> {
                 }
                 let interval = std::time::Duration::from_secs(minutes * 60);
                 if last_refresh.elapsed() >= interval {
+                    // Refreshes every kind (block/allow/rewrite) in one pass.
                     bm.refresh_sources().await;
                     upstream.cache_flush();
                     last_refresh = tokio::time::Instant::now();

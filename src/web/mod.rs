@@ -70,7 +70,10 @@ impl AppState {
 
         config.dns.upstreams = self.upstream.get_upstream_labels();
         config.blocking.enabled = self.blocklist.is_enabled().await;
-        config.blocking.blocklists = self.blocklist.get_sources().await;
+        // Write canonical typed sources and clear the legacy field so saved
+        // configs stay unambiguous.
+        config.blocking.sources = self.blocklist.get_sources().await;
+        config.blocking.blocklists = Vec::new();
         config.blocking.custom_blocked = self.blocklist.get_custom_blocked().await;
         config.blocking.allowlist = self.blocklist.get_allowlist().await;
         config.blocking.update_interval_minutes = *self.blocklist_update_interval.read().await;
@@ -1879,15 +1882,21 @@ async fn api_remove_allowlisted(
     Ok(StatusCode::OK)
 }
 
-// ==================== Blocklist Sources ====================
+// ==================== External Lists ====================
 
-async fn api_blocklist_sources(State(state): State<AppState>) -> Json<Vec<String>> {
+async fn api_blocklist_sources(
+    State(state): State<AppState>,
+) -> Json<Vec<crate::blocklist::SourceEntry>> {
     Json(state.blocklist.get_sources().await)
 }
 
 #[derive(Deserialize)]
 struct UrlRequest {
     url: String,
+    /// Source kind: "block", "allow", or "rewrite".  Defaults to "block"
+    /// for back-compat with UI/clients that predate typed sources.
+    #[serde(default)]
+    kind: Option<crate::blocklist::SourceKind>,
 }
 
 #[derive(Serialize)]
@@ -1920,14 +1929,18 @@ async fn api_add_blocklist_source(
             message: "URLs pointing to internal or private addresses are not allowed".to_string(),
         }));
     }
-    match state.blocklist.add_blocklist_source(&req.url).await {
+    let kind = req.kind.unwrap_or(crate::blocklist::SourceKind::Block);
+    match state.blocklist.add_source(&req.url, kind).await {
         Ok(count) => {
-            info!("Added blocklist source: {} ({} entries)", req.url, count);
+            info!(
+                "Added source: {} (kind={:?}, {} entries)",
+                req.url, kind, count
+            );
             state.upstream.cache_flush();
             state.save_config().await;
             Ok(Json(BlocklistAddResponse {
                 success: true,
-                message: format!("Loaded {} domains", count),
+                message: format!("Loaded {} entries", count),
             }))
         }
         Err(e) => Ok(Json(BlocklistAddResponse {
@@ -1943,7 +1956,7 @@ async fn api_remove_blocklist_source(
     Json(req): Json<UrlRequest>,
 ) -> Result<StatusCode, Response> {
     require_permission(&user, Permission::ManageBlocklists)?;
-    state.blocklist.remove_blocklist_source(&req.url).await;
+    state.blocklist.remove_source(&req.url).await;
     state.upstream.cache_flush();
     info!("Removed blocklist source: {}", req.url);
     state.save_config().await;
@@ -1979,6 +1992,7 @@ async fn api_blocklist_refresh_sse(
     let upstream = state.upstream.clone();
 
     tokio::spawn(async move {
+        // refresh_sources_streaming now covers every kind (block, allow, rewrite).
         blocklist.refresh_sources_streaming(tx).await;
         upstream.cache_flush();
     });
