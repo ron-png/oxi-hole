@@ -179,14 +179,23 @@ pub async fn run(
                 // release their slot promptly.  `http1().header_read_timeout`
                 // catches slowloris header dribble; the h2 keepalive ping
                 // catches silently dead HTTP/2 connections.
+                //
+                // hyper 1.x decouples the runtime: any timeout setting
+                // (header_read_timeout / keep_alive_interval / keep_alive_timeout)
+                // requires a Timer to be explicitly installed on both the
+                // http/1 and http/2 builders.  Without this, hyper panics
+                // inside `common/time.rs` on first timer use and the
+                // connection silently drops.
                 let mut builder = hyper_util::server::conn::auto::Builder::new(
                     hyper_util::rt::TokioExecutor::new(),
                 );
                 builder
                     .http1()
+                    .timer(hyper_util::rt::TokioTimer::new())
                     .header_read_timeout(Some(Duration::from_secs(DOH_HEADER_READ_TIMEOUT_SECS)));
                 builder
                     .http2()
+                    .timer(hyper_util::rt::TokioTimer::new())
                     .keep_alive_interval(Some(Duration::from_secs(DOH_H2_KEEPALIVE_INTERVAL_SECS)))
                     .keep_alive_timeout(Duration::from_secs(DOH_H2_KEEPALIVE_TIMEOUT_SECS));
 
