@@ -2374,44 +2374,51 @@
             <pre id="updateLogs"
                 style="display: none; margin-top: 10px; padding: 10px; background: var(--card-bg); border-radius: 6px; max-height: 300px; overflow-y: auto; font-size: 12px; white-space: pre-wrap; word-break: break-all;"></pre>
         </div>
-        <!-- Stats (always visible).  Total/Blocked/Block-Rate follow the
-             time range selected in the Statistics Over Time section below.
-             Blocklist size + cache stats stay live (they are current-state
-             values with no meaningful "range"). -->
-        <div class="stats-grid">
-            <div class="stat-card">
-                <div class="label" data-tooltip="Total DNS queries during the selected time range. Change the range in the Statistics Over Time section below.">Total Queries <span id="totalQueriesRange" class="stat-card-range">(7d)</span></div>
-                <div class="value" id="totalQueries">—</div>
-            </div>
-            <div class="stat-card">
-                <div class="label" data-tooltip="Queries blocked during the selected time range.">Blocked Queries <span id="blockedQueriesRange" class="stat-card-range">(7d)</span></div>
-                <div class="value blocked" id="blockedQueries">—</div>
-            </div>
-            <div class="stat-card">
-                <div class="label" data-tooltip="Percentage of queries that were blocked during the selected time range.">Block Rate <span id="blockPctRange" class="stat-card-range">(7d)</span></div>
-                <div class="value pct" id="blockPct">—</div>
-            </div>
-            <div class="stat-card">
-                <div class="label" data-tooltip="Total number of unique domains loaded from all active blocklists.">
-                    Domains on Blocklist</div>
-                <div class="value size" id="blocklistSize">0</div>
-            </div>
-            <div class="stat-card">
-                <div class="label"
-                    data-tooltip="Number of DNS responses currently stored in the cache to speed up repeat lookups.">
-                    Cache Size</div>
-                <div class="value size" id="cacheSize">0</div>
-                <div class="label" style="margin-top:10px;"
-                    data-tooltip="Percentage of queries answered from cache instead of forwarding to upstream DNS servers. Higher is better.">
-                    Hit Rate</div>
-                <div class="value pct" id="cacheHitRate">0.0%</div>
-                <button type="button" class="btn btn-danger btn-sm" style="margin-top:12px;" onclick="flushCache()">Flush
-                    Cache</button>
-            </div>
-        </div>
-
         <!-- ==================== SIMPLE MODE ==================== -->
         <div id="panelSimple" class="panel active">
+
+            <!-- Quick feature toggles — first thing on the home tab so the
+                 most common action (flip a feature on/off) is always one
+                 click away. -->
+            <div class="features-grid" id="featuresGrid">
+                <!-- Populated by JS -->
+            </div>
+
+            <!-- Stats cards: Total/Blocked/Block-Rate follow the time range
+                 selected in the Statistics Over Time section below; Domains
+                 on Blocklist + Cache live state.  Home tab only — other tabs
+                 don't need this screen-full of numbers. -->
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="label" data-tooltip="Total DNS queries during the selected time range. Change the range in the Statistics Over Time section below.">Total Queries <span id="totalQueriesRange" class="stat-card-range">(7d)</span></div>
+                    <div class="value" id="totalQueries">—</div>
+                </div>
+                <div class="stat-card">
+                    <div class="label" data-tooltip="Queries blocked during the selected time range.">Blocked Queries <span id="blockedQueriesRange" class="stat-card-range">(7d)</span></div>
+                    <div class="value blocked" id="blockedQueries">—</div>
+                </div>
+                <div class="stat-card">
+                    <div class="label" data-tooltip="Percentage of queries that were blocked during the selected time range.">Block Rate <span id="blockPctRange" class="stat-card-range">(7d)</span></div>
+                    <div class="value pct" id="blockPct">—</div>
+                </div>
+                <div class="stat-card">
+                    <div class="label" data-tooltip="Total number of unique domains loaded from all active blocklists.">
+                        Domains on Blocklist</div>
+                    <div class="value size" id="blocklistSize">0</div>
+                </div>
+                <div class="stat-card">
+                    <div class="label"
+                        data-tooltip="Number of DNS responses currently stored in the cache to speed up repeat lookups.">
+                        Cache Size</div>
+                    <div class="value size" id="cacheSize">0</div>
+                    <div class="label" style="margin-top:10px;"
+                        data-tooltip="Percentage of queries answered from cache instead of forwarding to upstream DNS servers. Higher is better.">
+                        Hit Rate</div>
+                    <div class="value pct" id="cacheHitRate">0.0%</div>
+                    <button type="button" class="btn btn-danger btn-sm" style="margin-top:12px;" onclick="flushCache()">Flush
+                        Cache</button>
+                </div>
+            </div>
 
             <!-- Historical statistics: time-range selector, summary card,
                  hourly/daily bar chart, top-queried and top-blocked tables.
@@ -2459,10 +2466,6 @@
                         </table>
                     </div>
                 </div>
-            </div>
-
-            <div class="features-grid" id="featuresGrid">
-                <!-- Populated by JS -->
             </div>
         </div>
 
