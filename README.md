@@ -1155,6 +1155,7 @@ Please note that this list is not a promise, rather thoughts I might change my m
 - when query logs;
   - Add a toggle to enable/disable query logging
   - some users might want to keep query logging for a less than a day. (e.g. 12 hours)
+  - when system resources are low, the query log should be rotated/oldest entries deleted.
 - When enabling DoH, the user should be able to define the https request path (feature)
   - make sure that the path is not used by any other service on the same server.
 - if the user wants a different subdomain for DoH, DoT and DoQ, the user should be able to define it in the UI (feature)
