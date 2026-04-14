@@ -2254,8 +2254,9 @@
                             </label>
                             <label>
                                 Query log retention:
-                                <input type="number" id="logRetentionInput" min="1" value="7">
-                                <select id="logRetentionUnit">
+                                <input type="number" id="logRetentionInput" min="1" value="7"
+                                    oninput="debouncedSaveLogSettings()" onchange="saveLogSettings()">
+                                <select id="logRetentionUnit" onchange="saveLogSettings()">
                                     <option value="minutes">minutes</option>
                                     <option value="hours">hours</option>
                                     <option value="days" selected>days</option>
@@ -2263,15 +2264,16 @@
                             </label>
                             <label>
                                 Statistics retention:
-                                <input type="number" id="statsRetentionInput" min="1" max="365" value="90">
+                                <input type="number" id="statsRetentionInput" min="1" max="365" value="90"
+                                    oninput="debouncedSaveLogSettings()" onchange="saveLogSettings()">
                                 days
                             </label>
-                            <button type="button" class="btn btn-sm" onclick="saveLogSettings()">Save</button>
                             <span class="logs-db-info" id="logsDbInfo" style="margin-left: auto; color: var(--text-muted); font-family: var(--font-mono); font-size: 12px;"></span>
                             <label>
                                 <input type="checkbox" id="logAnonIpCheckbox" onchange="saveLogSettings()">
                                 Anonymize client IPs
                             </label>
+                            <button type="button" class="btn btn-danger btn-sm manage-system-only" onclick="confirmClearLogs()">Delete All Logs</button>
                         </div>
 
                         <div class="logs-controls">
@@ -5851,7 +5853,16 @@
             } catch (e) { console.error('Failed to load log settings', e); }
         }
 
+        // Debounce number-input changes so typing "120" doesn't fire a save
+        // for "1", "12", and "120" — only for the final value.
+        let saveLogSettingsTimer = null;
+        function debouncedSaveLogSettings() {
+            clearTimeout(saveLogSettingsTimer);
+            saveLogSettingsTimer = setTimeout(saveLogSettings, 500);
+        }
+
         async function saveLogSettings() {
+            clearTimeout(saveLogSettingsTimer);
             const query_log_enabled = document.getElementById('logEnabledCheckbox').checked;
             const rawNum = parseInt(document.getElementById('logRetentionInput').value, 10);
             const unit = document.getElementById('logRetentionUnit').value;
@@ -5874,6 +5885,27 @@
                 // Reload the reported state so the DB-size badge refreshes.
                 refreshLogSettings();
             } catch (e) { console.error('Failed to save log settings', e); }
+        }
+
+        async function confirmClearLogs() {
+            if (!confirm('Delete ALL query log entries?\n\nThis removes the active DB contents and the archive file. Settings (retention, anonymize, etc.) are preserved. This cannot be undone.')) {
+                return;
+            }
+            try {
+                const res = await fetch('/api/logs/clear', { method: 'POST' });
+                if (!res.ok) {
+                    const err = await res.json().catch(() => ({ error: res.statusText }));
+                    alert('Delete failed: ' + (err.error || res.statusText));
+                    return;
+                }
+                // Refresh the log table + the DB-size badge.
+                if (typeof resetAndLoadLogs === 'function') {
+                    resetAndLoadLogs();
+                }
+                refreshLogSettings();
+            } catch (e) {
+                alert('Delete failed: ' + e.message);
+            }
         }
 
         // ---- Cache Stats ----

@@ -529,6 +529,37 @@ impl QueryLog {
         Ok(size_before)
     }
 
+    /// Delete every row from the active DB and drop the archive file.
+    /// Used by the "Delete all query logs" web-UI action.
+    pub async fn clear_all(&self) -> anyhow::Result<()> {
+        let conn = self.conn.clone();
+        let attached_flag = self.archive_attached.clone();
+        conn.call(move |conn| {
+            if attached_flag.load(Ordering::Relaxed) {
+                let _ = conn.execute_batch("DETACH DATABASE archive;");
+                attached_flag.store(false, Ordering::Relaxed);
+            }
+            conn.execute("DELETE FROM query_log", [])?;
+            // Reset AUTOINCREMENT so the next inserted row starts at id 1 again.
+            let _ = conn.execute("DELETE FROM sqlite_sequence WHERE name='query_log'", []);
+            conn.execute_batch("VACUUM;")?;
+            Ok(())
+        })
+        .await?;
+
+        // Remove archive file + its WAL / SHM sidecars.
+        let _ = std::fs::remove_file(&self.archive_path);
+        let mut sidecar = self.archive_path.clone().into_os_string();
+        sidecar.push("-wal");
+        let _ = std::fs::remove_file(std::path::PathBuf::from(&sidecar));
+        let mut sidecar = self.archive_path.clone().into_os_string();
+        sidecar.push("-shm");
+        let _ = std::fs::remove_file(std::path::PathBuf::from(&sidecar));
+
+        warn!("All query log entries cleared by operator request");
+        Ok(())
+    }
+
     /// Trim the oldest `fraction` (0.0..=1.0) of rows from the active DB.
     /// Used by emergency purge as a last resort when dropping the archive
     /// wasn't enough to hit the free-disk floor.

@@ -525,6 +525,7 @@ pub async fn run_web_server(
         .route("/api/logs", get(api_logs))
         .route("/api/logs/settings", get(api_get_log_settings))
         .route("/api/logs/settings", post(api_set_log_settings))
+        .route("/api/logs/clear", post(api_clear_logs))
         // Auth middleware (after all routes, before state)
         .layer(axum::middleware::from_fn_with_state(
             auth_for_middleware,
@@ -2639,6 +2640,25 @@ async fn api_set_log_settings(
     }
     state.save_config().await;
     Ok(StatusCode::OK)
+}
+
+/// Delete every row from the active query-log DB and drop the archive file.
+/// Destructive — requires ManageSystem.  No config changes, no restart.
+async fn api_clear_logs(
+    axum::Extension(user): axum::Extension<AuthenticatedUser>,
+    State(state): State<AppState>,
+) -> Response {
+    if !user.permissions.contains(&Permission::ManageSystem) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    match state.query_log.clear_all().await {
+        Ok(()) => Json(serde_json::json!({ "success": true })).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": format!("{}", e) })),
+        )
+            .into_response(),
+    }
 }
 
 // ==================== TLS Certificate Management ====================
