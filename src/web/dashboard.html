@@ -1133,7 +1133,22 @@
             display: flex;
             align-items: center;
             justify-content: space-between;
+            gap: 8px;
             border-bottom: 1px solid var(--border-light);
+            /* Without min-width: 0 a flex child with long content forces
+               the whole row wider than its container, pushing trailing
+               buttons (Remove) off-screen. */
+            min-width: 0;
+        }
+
+        .upstream-list li .upstream-label {
+            flex: 1 1 auto;
+            min-width: 0;
+            /* URLs have no natural break points — allow the renderer to
+               wrap mid-string so the Remove button stays inside the
+               section even for very long rewrite-list URLs. */
+            overflow-wrap: anywhere;
+            word-break: break-all;
         }
 
         .upstream-list li:last-child {
