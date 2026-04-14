@@ -431,7 +431,6 @@ pub async fn run_web_server(
         .route("/api/stats/history", get(api_stats_history))
         .route("/api/stats/top-domains", get(api_stats_top_domains))
         .route("/api/stats/summary", get(api_stats_summary))
-        .route("/api/queries", get(api_queries))
         // Master blocking
         .route("/api/blocking", get(api_blocking_status))
         .route("/api/blocking/enable", post(api_enable_blocking))
@@ -1619,10 +1618,6 @@ async fn api_stats(State(state): State<AppState>) -> Json<StatsResponse> {
     })
 }
 
-async fn api_queries(State(state): State<AppState>) -> Json<Vec<crate::stats::QueryLogEntry>> {
-    Json(state.stats.recent_queries(200).await)
-}
-
 // ==================== Master Blocking ====================
 
 #[derive(Serialize)]
@@ -2712,7 +2707,7 @@ async fn api_clear_stats(
         Ok(()) => {
             // Also reset the in-memory live counters so the dashboard cards
             // aren't showing stale sums after a wipe.
-            state.stats.reset().await;
+            state.stats.reset();
             Json(serde_json::json!({ "success": true })).into_response()
         }
         Err(e) => (

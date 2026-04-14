@@ -2464,22 +2464,6 @@
             <div class="features-grid" id="featuresGrid">
                 <!-- Populated by JS -->
             </div>
-
-            <div class="section">
-                <h2>Recent Queries</h2>
-                <div id="query-log-simple">
-                    <table>
-                        <thead>
-                            <tr>
-                                <th>Time</th>
-                                <th>Domain</th>
-                                <th>Status</th>
-                            </tr>
-                        </thead>
-                        <tbody id="queryBodySimple"></tbody>
-                    </table>
-                </div>
-            </div>
         </div>
 
         <!-- ==================== LOGS MODE ==================== -->
@@ -3679,7 +3663,6 @@
             document.getElementById('modeLogs').classList.toggle('active', mode === 'logs');
             document.getElementById('modeAdvanced').classList.toggle('active', mode === 'advanced');
             if (mode === 'advanced') {
-                refreshQueries();
                 refreshUpstreams();
                 refreshBlocklistSources();
                 loadLastRefreshed();
@@ -3803,27 +3786,6 @@
             const isEnabled = btn.classList.contains('enabled');
             await fetch('/api/blocking/' + (isEnabled ? 'disable' : 'enable'), { method: 'POST' });
             refreshStats();
-        }
-
-        // ---- Queries ----
-        async function refreshQueries() {
-            try {
-                const res = await fetch('/api/queries');
-                const queries = await res.json();
-
-                // Simple view
-                const simpleBody = document.getElementById('queryBodySimple');
-                simpleBody.innerHTML = queries.slice(0, 50).map(q => `
-                    <tr>
-                        <td>${new Date(q.timestamp).toLocaleTimeString()}</td>
-                        <td>${escapeHtml(q.domain)}</td>
-                        <td><span class="badge ${q.blocked ? 'blocked' : (q.upstream === 'safe-search' ? 'rewrite' : 'allowed')}">
-                            ${q.blocked ? 'BLOCKED' : (q.upstream === 'safe-search' ? 'SAFE' : 'OK')}
-                        </span></td>
-                    </tr>
-                `).join('');
-
-            } catch (e) { console.error(e); }
         }
 
         // ---- Advanced: Domains ----
@@ -6625,7 +6587,6 @@
             refreshStats();
             loadLastRefreshed();
             pollUpdateStatus();
-            refreshQueries();
             refreshFeatures();
             refreshCustomBlocked();
             refreshAllowlist();
@@ -6635,7 +6596,6 @@
         });
         setInterval(() => {
             refreshStats();
-            refreshQueries();
             refreshCacheStats();
             // Cheap query — keeps the three range-scoped top cards feeling
             // live as new traffic comes in.

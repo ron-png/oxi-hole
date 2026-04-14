@@ -289,7 +289,7 @@ async fn main() -> anyhow::Result<()> {
     let persistent_stats = persistent_stats::PersistentStats::open(&stats_db_path).await?;
 
     // Initialize stats
-    let stats = stats::Stats::new(10_000, Some(persistent_stats.clone()));
+    let stats = stats::Stats::new(Some(persistent_stats.clone()));
 
     // Shared blocking mode (so web UI can change it at runtime)
     let blocking_mode = std::sync::Arc::new(tokio::sync::RwLock::new(
