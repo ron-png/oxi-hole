@@ -490,8 +490,14 @@ async fn main() -> anyhow::Result<()> {
             return None;
         }
         // f_bavail is blocks available to unprivileged users — the number
-        // the operator actually cares about.
-        Some(stat.f_bavail * stat.f_frsize)
+        // the operator actually cares about.  On Linux these fields are
+        // already u64; on macOS/BSD they're u32.  `u64::from` upcasts either
+        // cleanly, so it's the only expression that compiles everywhere.
+        // Clippy flags the Linux case as a useless conversion — allow it so
+        // cross-platform CI stays green.
+        #[allow(clippy::useless_conversion)]
+        let bytes = u64::from(stat.f_bavail) * u64::from(stat.f_frsize);
+        Some(bytes)
     }
 
     // Spawn stats flush task (every 60 seconds)
