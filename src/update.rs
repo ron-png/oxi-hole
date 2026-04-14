@@ -424,6 +424,176 @@ pub fn try_replace_binary(
     Ok(())
 }
 
+/// One-shot "check for updates" flow for CLI invocation (`oxi-dns --check-update`).
+/// Prints a human-readable result to stdout and returns the exit code to use.
+/// 0 = no update, 1 = update available, 2 = check failed.
+pub async fn cli_check_update(channel: &str) -> i32 {
+    let checker = UpdateChecker::new();
+    let info = checker.check(true, channel).await;
+    println!("Current version: {}", info.current_version);
+    match info.latest_version {
+        Some(v) if info.update_available => {
+            println!("Latest version:  {} (update available)", v);
+            if let Some(url) = info.release_url {
+                println!("Release notes:   {}", url);
+            }
+            println!("\nRun `oxi-dns --update` to install it.");
+            1
+        }
+        Some(v) => {
+            println!("Latest version:  {}", v);
+            println!("Already up to date.");
+            0
+        }
+        None => {
+            eprintln!("Could not check for updates (network error or rate limit).");
+            2
+        }
+    }
+}
+
+/// One-shot "check + download + install + restart" flow for CLI invocation
+/// (`oxi-dns --update`).  Unlike `perform_robust_update`, this does *not* do
+/// the zero-downtime takeover dance (that's only meaningful when the caller
+/// *is* the running server).  Here we just replace the binary and ask the
+/// init system to restart the service, if any.
+///
+/// Returns the exit code: 0 on success (including "nothing to do"),
+/// non-zero on failure.
+pub async fn cli_perform_update(channel: &str, config_path: &std::path::Path) -> i32 {
+    let checker = UpdateChecker::new();
+
+    println!("Checking for updates on channel '{}'...", channel);
+    let info = checker.check(true, channel).await;
+    if !info.update_available {
+        println!("Already up to date (v{}).", info.current_version);
+        return 0;
+    }
+    let Some(latest) = info.latest_version.clone() else {
+        eprintln!("Update check succeeded but no latest version was reported.");
+        return 2;
+    };
+    println!("Update available: v{} → v{}", info.current_version, latest);
+
+    // --- Download ---
+    println!("Downloading...");
+    let (tmp_path, version) = match checker.download_update(channel).await {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("Download failed: {}", e);
+            return 3;
+        }
+    };
+
+    // --- Health check the new binary ---
+    println!("Running health check on v{}...", version);
+    let health = tokio::process::Command::new(&tmp_path)
+        .arg("--health-check")
+        .arg(config_path.to_str().unwrap_or("config.toml"))
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .output();
+    let output = match tokio::time::timeout(std::time::Duration::from_secs(30), health).await {
+        Ok(Ok(o)) => o,
+        Ok(Err(e)) => {
+            eprintln!("Health check failed to run: {}", e);
+            let _ = std::fs::remove_file(&tmp_path);
+            return 4;
+        }
+        Err(_) => {
+            eprintln!("Health check timed out after 30s.");
+            let _ = std::fs::remove_file(&tmp_path);
+            return 4;
+        }
+    };
+    if !output.status.success() {
+        eprintln!(
+            "Health check failed (exit {:?}):\nstdout:\n{}\nstderr:\n{}",
+            output.status.code(),
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+        let _ = std::fs::remove_file(&tmp_path);
+        return 4;
+    }
+
+    // --- Replace the installed binary ---
+    let current_exe = match std::env::current_exe() {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("Cannot determine current binary path: {}", e);
+            let _ = std::fs::remove_file(&tmp_path);
+            return 5;
+        }
+    };
+    let binary_bytes = match std::fs::read(&tmp_path) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("Failed to read downloaded binary: {}", e);
+            let _ = std::fs::remove_file(&tmp_path);
+            return 5;
+        }
+    };
+    println!("Replacing {}...", current_exe.display());
+    if let Err(e) = try_replace_binary(&current_exe, &binary_bytes) {
+        eprintln!(
+            "Failed to replace binary: {}\nHint: run as the user that owns {} (usually root).",
+            e,
+            current_exe.display()
+        );
+        let _ = std::fs::remove_file(&tmp_path);
+        return 6;
+    }
+    let _ = std::fs::remove_file(&tmp_path);
+
+    // --- Try to restart the running service, if any ---
+    let restart_result = attempt_service_restart();
+    match restart_result {
+        Some(Ok(unit)) => {
+            println!("Updated to v{} and restarted {}.", version, unit);
+        }
+        Some(Err(e)) => {
+            println!(
+                "Updated to v{}, but automatic restart failed: {}\nRestart the service manually to apply.",
+                version, e
+            );
+        }
+        None => {
+            println!(
+                "Updated to v{}. No systemd unit detected — restart the service manually to apply.",
+                version
+            );
+        }
+    }
+    0
+}
+
+/// Best-effort restart of the oxi-dns service.  Returns:
+///   * `Some(Ok(unit_name))` — ran `systemctl restart <unit>` successfully
+///   * `Some(Err(msg))`      — systemd unit detected but restart failed
+///   * `None`                 — no systemd / unit not detected
+fn attempt_service_restart() -> Option<Result<&'static str, String>> {
+    if !std::path::Path::new("/run/systemd/system").exists() {
+        return None;
+    }
+    // Try the common unit name; users who renamed theirs have to restart
+    // manually (we can't reliably autodiscover).
+    const UNIT: &str = "oxi-dns";
+    let output = std::process::Command::new("systemctl")
+        .arg("restart")
+        .arg(UNIT)
+        .output();
+    match output {
+        Ok(o) if o.status.success() => Some(Ok(UNIT)),
+        Ok(o) => Some(Err(format!(
+            "systemctl exited {:?}: {}",
+            o.status.code(),
+            String::from_utf8_lossy(&o.stderr).trim()
+        ))),
+        Err(e) => Some(Err(format!("failed to invoke systemctl: {}", e))),
+    }
+}
+
 /// Extract the binary from a .tar.gz archive. Looks for the first regular file entry.
 fn extract_binary_from_tar_gz(data: &[u8]) -> Result<Vec<u8>, String> {
     use std::io::Read;

@@ -81,4 +81,13 @@ impl Stats {
         let log = self.query_log.read().await;
         log.iter().take(limit).cloned().collect()
     }
+
+    /// Reset live counters and drop recent-queries buffer.  Used by the
+    /// "Delete all stats" web action so the dashboard cards immediately
+    /// reflect the wipe rather than showing stale sums.
+    pub async fn reset(&self) {
+        self.total_queries.store(0, Ordering::Relaxed);
+        self.blocked_queries.store(0, Ordering::Relaxed);
+        self.query_log.write().await.clear();
+    }
 }

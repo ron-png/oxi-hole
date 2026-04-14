@@ -86,8 +86,13 @@ pub struct LimitsConfig {
     pub query_log_rotate_mb: Option<u64>,
     /// Minimum free disk to keep on the query log's filesystem.  Below this,
     /// an emergency purge drops the archive then trims the active DB.
+    /// Shared floor — also used by the stats DB since they live on the same
+    /// filesystem.
     #[serde(default)]
     pub query_log_free_disk_floor_mb: Option<u64>,
+    /// When the stats DB grows past this, rotate oldest rows into an archive.
+    #[serde(default)]
+    pub stats_rotate_mb: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -233,15 +238,25 @@ pub struct LogConfig {
     /// Retention in minutes. Takes precedence over `_days` when set.
     #[serde(default)]
     pub query_log_retention_minutes: Option<u32>,
-    #[serde(default = "default_stats_retention")]
-    pub stats_retention_days: u32,
+    /// Whether persistent statistics (hourly aggregates, top domains) are
+    /// recorded. When false, new queries are not counted; existing rows
+    /// remain and can still be viewed/deleted from the web UI.
+    #[serde(default = "default_true")]
+    pub stats_enabled: bool,
+    /// Legacy: retention in days.  Kept for back-compat.
+    #[serde(default)]
+    pub stats_retention_days: Option<u32>,
+    /// Canonical retention in minutes for persistent stats.  Takes precedence
+    /// over `stats_retention_days` when set.
+    #[serde(default)]
+    pub stats_retention_minutes: Option<u32>,
     /// Whether to anonymize client IPs in the query log
     #[serde(default)]
     pub anonymize_client_ip: bool,
 }
 
 impl LogConfig {
-    /// Effective retention in minutes, resolving minutes-vs-days precedence.
+    /// Effective query-log retention in minutes.
     pub fn effective_retention_minutes(&self) -> u32 {
         if let Some(m) = self.query_log_retention_minutes {
             return m;
@@ -251,13 +266,24 @@ impl LogConfig {
         }
         default_query_log_retention_days().saturating_mul(1440)
     }
+
+    /// Effective stats retention in minutes.
+    pub fn effective_stats_retention_minutes(&self) -> u32 {
+        if let Some(m) = self.stats_retention_minutes {
+            return m;
+        }
+        if let Some(d) = self.stats_retention_days {
+            return d.saturating_mul(1440);
+        }
+        default_stats_retention_days().saturating_mul(1440)
+    }
 }
 
 fn default_query_log_retention_days() -> u32 {
     7
 }
 
-fn default_stats_retention() -> u32 {
+fn default_stats_retention_days() -> u32 {
     90
 }
 
@@ -269,7 +295,9 @@ impl Default for LogConfig {
             query_log_retention_minutes: Some(
                 default_query_log_retention_days().saturating_mul(1440),
             ),
-            stats_retention_days: default_stats_retention(),
+            stats_enabled: true,
+            stats_retention_days: None,
+            stats_retention_minutes: Some(default_stats_retention_days().saturating_mul(1440)),
             anonymize_client_ip: false,
         }
     }
@@ -467,6 +495,19 @@ impl Config {
                 self.log.query_log_retention_minutes = Some(d.saturating_mul(1440));
                 tracing::info!(
                     "Config migration: query_log_retention_days={} → query_log_retention_minutes={}",
+                    d,
+                    d.saturating_mul(1440)
+                );
+                changed = true;
+            }
+        }
+
+        // v0.6.5+: stats_retention_days → stats_retention_minutes (same rationale).
+        if self.log.stats_retention_minutes.is_none() {
+            if let Some(d) = self.log.stats_retention_days.take() {
+                self.log.stats_retention_minutes = Some(d.saturating_mul(1440));
+                tracing::info!(
+                    "Config migration: stats_retention_days={} → stats_retention_minutes={}",
                     d,
                     d.saturating_mul(1440)
                 );

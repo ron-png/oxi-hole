@@ -25,6 +25,31 @@ use tracing::{info, warn};
 
 const VERSION: &str = env!("OXIDNS_VERSION");
 
+#[derive(Copy, Clone)]
+enum CliAction {
+    CheckUpdate,
+    PerformUpdate,
+}
+
+fn print_help() {
+    println!(
+        "oxi-dns {VERSION}
+Usage: oxi-dns [CONFIG_PATH] [OPTIONS]
+
+Options:
+  -V, --version          Print version and exit
+  -h, --help             Print this help
+      --health-check     Run startup sanity check and exit (non-zero on failure)
+      --check-update     Check for a newer release on the configured channel
+  -u, --update           Download, health-check, install, and restart to apply
+      --reconfigure      Apply config changes from KEY=VALUE pairs, then exit
+      --takeover         Internal: zero-downtime takeover mode
+      --ready-file PATH  Internal: write to PATH when listeners are bound
+
+CONFIG_PATH defaults to /etc/oxi-dns/config.toml.",
+    );
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // Parse CLI arguments
@@ -34,12 +59,17 @@ async fn main() -> anyhow::Result<()> {
     let mut config_arg: Option<String> = None;
     let mut reconfigure_args: Vec<String> = Vec::new();
     let mut is_reconfigure = false;
+    let mut cli_action: Option<CliAction> = None;
 
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
             "--version" | "-V" => {
                 println!("oxi-dns {}", VERSION);
+                return Ok(());
+            }
+            "--help" | "-h" => {
+                print_help();
                 return Ok(());
             }
             "--health-check" => health_check = true,
@@ -54,6 +84,8 @@ async fn main() -> anyhow::Result<()> {
             "--reconfigure" => {
                 is_reconfigure = true;
             }
+            "--check-update" => cli_action = Some(CliAction::CheckUpdate),
+            "--update" | "-u" => cli_action = Some(CliAction::PerformUpdate),
             other => {
                 if is_reconfigure && other.contains('=') {
                     reconfigure_args.push(other.to_string());
@@ -76,6 +108,19 @@ async fn main() -> anyhow::Result<()> {
             std::process::exit(1);
         }
         return Ok(());
+    }
+
+    // Handle the standalone update flows before we bring up the DNS server.
+    if let Some(action) = cli_action {
+        // Use the release channel from config when present; otherwise default.
+        let channel = Config::load(&config_path)
+            .map(|c| c.system.release_channel)
+            .unwrap_or_else(|_| "stable".to_string());
+        let code = match action {
+            CliAction::CheckUpdate => update::cli_check_update(&channel).await,
+            CliAction::PerformUpdate => update::cli_perform_update(&channel, &config_path).await,
+        };
+        std::process::exit(code);
     }
 
     rustls::crypto::ring::default_provider()
@@ -277,8 +322,10 @@ async fn main() -> anyhow::Result<()> {
     let ipv6_enabled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(
         config.system.ipv6_enabled,
     ));
-    let stats_retention_days =
-        std::sync::Arc::new(tokio::sync::RwLock::new(config.log.stats_retention_days));
+    let stats_retention_minutes = std::sync::Arc::new(tokio::sync::RwLock::new(
+        config.log.effective_stats_retention_minutes(),
+    ));
+    persistent_stats.set_enabled(config.log.stats_enabled);
 
     // Start DNS server (all protocols)
     let upstream_for_web = upstream.clone();
@@ -373,7 +420,7 @@ async fn main() -> anyhow::Result<()> {
         release_channel: release_channel.clone(),
         update_check_signal: update_check_tx,
         persistent_stats: persistent_stats.clone(),
-        stats_retention_days: stats_retention_days.clone(),
+        stats_retention_minutes: stats_retention_minutes.clone(),
         acme: std::sync::Arc::new(crate::acme::AcmeState::new()),
     };
 
@@ -420,24 +467,25 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
-    // Query log size / disk pressure monitor.  Every 5 minutes:
-    //   1. If the active DB is over the rotate threshold, move oldest half
-    //      of rows into the archive (data preserved, UI still sees it).
-    //   2. If free disk on the log's filesystem is below the floor, drop the
-    //      archive entirely, then trim the active DB if still below.
+    // Size / disk pressure monitor for query log AND stats DBs.
+    // Every 5 minutes:
+    //   1. Rotate each DB past its own rotate threshold.
+    //   2. If free disk is below the shared floor, drop archives, then
+    //      trim actives as last resort.
     {
         let ql = web_state.query_log.clone();
+        let ps = persistent_stats.clone();
         tokio::spawn(async move {
             loop {
                 tokio::time::sleep(std::time::Duration::from_secs(300)).await;
                 let limits = crate::resources::limits();
 
-                // Step 1: rotation based on active DB size.
-                let active_size = ql.active_db_size();
-                if active_size > limits.query_log_rotate_bytes {
+                // Step 1a: rotate query log if active exceeds threshold.
+                let ql_size = ql.active_db_size();
+                if ql_size > limits.query_log_rotate_bytes {
                     tracing::info!(
                         "Query log rotation: active DB at {} MB exceeds {} MB threshold",
-                        active_size / (1024 * 1024),
+                        ql_size / (1024 * 1024),
                         limits.query_log_rotate_bytes / (1024 * 1024),
                     );
                     if let Err(e) = ql.rotate_to_archive().await {
@@ -445,7 +493,20 @@ async fn main() -> anyhow::Result<()> {
                     }
                 }
 
-                // Step 2: emergency purge based on free disk.
+                // Step 1b: rotate stats DB likewise.
+                let st_size = ps.active_db_size();
+                if st_size > limits.stats_rotate_bytes {
+                    tracing::info!(
+                        "Stats rotation: active DB at {} MB exceeds {} MB threshold",
+                        st_size / (1024 * 1024),
+                        limits.stats_rotate_bytes / (1024 * 1024),
+                    );
+                    if let Err(e) = ps.rotate_to_archive().await {
+                        tracing::warn!("Stats rotation failed: {}", e);
+                    }
+                }
+
+                // Step 2: shared emergency purge on free-disk pressure.
                 let log_dir = ql
                     .active_db_path()
                     .parent()
@@ -454,19 +515,27 @@ async fn main() -> anyhow::Result<()> {
                 match free_disk_bytes(&log_dir) {
                     Some(free) if free < limits.query_log_free_disk_floor_bytes => {
                         tracing::warn!(
-                            "Free disk ({} MB) below floor ({} MB); emergency-purging query log",
+                            "Free disk ({} MB) below floor ({} MB); emergency-purging query log + stats",
                             free / (1024 * 1024),
                             limits.query_log_free_disk_floor_bytes / (1024 * 1024),
                         );
                         if let Err(e) = ql.drop_archive().await {
-                            tracing::warn!("Emergency purge (archive drop) failed: {}", e);
+                            tracing::warn!("Emergency purge (query log archive) failed: {}", e);
                         }
-                        // Re-check — if the archive drop didn't free enough,
-                        // trim 25% of active rows as a last resort.
+                        if let Err(e) = ps.drop_archive().await {
+                            tracing::warn!("Emergency purge (stats archive) failed: {}", e);
+                        }
+                        // Still below? Trim both actives by 25%.
                         if let Some(still_free) = free_disk_bytes(&log_dir) {
                             if still_free < limits.query_log_free_disk_floor_bytes {
                                 if let Err(e) = ql.trim_active(0.25).await {
-                                    tracing::warn!("Emergency purge (active trim) failed: {}", e);
+                                    tracing::warn!(
+                                        "Emergency purge (query log trim) failed: {}",
+                                        e
+                                    );
+                                }
+                                if let Err(e) = ps.trim_active(0.25).await {
+                                    tracing::warn!("Emergency purge (stats trim) failed: {}", e);
                                 }
                             }
                         }
@@ -515,15 +584,16 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
-    // Spawn stats purge task (hourly)
+    // Stats purge task. Runs every minute so sub-day retention (e.g. 12h)
+    // tracks, same as the query-log purge.
     {
         let ps = persistent_stats.clone();
-        let retention = stats_retention_days.clone();
+        let retention = stats_retention_minutes.clone();
         tokio::spawn(async move {
             loop {
-                tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
-                let days = *retention.read().await;
-                if let Err(e) = ps.purge_older_than(days).await {
+                tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+                let minutes = *retention.read().await;
+                if let Err(e) = ps.purge_older_than_minutes(minutes).await {
                     tracing::warn!("Stats purge failed: {}", e);
                 }
             }

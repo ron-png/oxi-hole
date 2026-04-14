@@ -51,7 +51,7 @@ pub struct AppState {
     pub release_channel: std::sync::Arc<tokio::sync::RwLock<String>>,
     pub update_check_signal: tokio::sync::watch::Sender<bool>,
     pub persistent_stats: crate::persistent_stats::PersistentStats,
-    pub stats_retention_days: std::sync::Arc<tokio::sync::RwLock<u32>>,
+    pub stats_retention_minutes: std::sync::Arc<tokio::sync::RwLock<u32>>,
     pub acme: std::sync::Arc<crate::acme::AcmeState>,
 }
 
@@ -91,7 +91,12 @@ impl AppState {
         config.log.query_log_retention_minutes = Some(minutes);
         config.log.query_log_retention_days = None;
         config.log.query_log_enabled = self.query_log.is_enabled();
-        config.log.stats_retention_days = *self.stats_retention_days.read().await;
+        // Canonicalize stats retention to minutes and clear the legacy _days
+        // field so saved configs stay unambiguous.
+        let stats_minutes = *self.stats_retention_minutes.read().await;
+        config.log.stats_retention_minutes = Some(stats_minutes);
+        config.log.stats_retention_days = None;
+        config.log.stats_enabled = self.persistent_stats.is_enabled();
         config.log.anonymize_client_ip =
             self.anonymize_ip.load(std::sync::atomic::Ordering::Relaxed);
         config.system.release_channel = self.release_channel.read().await.clone();
@@ -526,6 +531,7 @@ pub async fn run_web_server(
         .route("/api/logs/settings", get(api_get_log_settings))
         .route("/api/logs/settings", post(api_set_log_settings))
         .route("/api/logs/clear", post(api_clear_logs))
+        .route("/api/stats/clear", post(api_clear_stats))
         // Auth middleware (after all routes, before state)
         .layer(axum::middleware::from_fn_with_state(
             auth_for_middleware,
@@ -2304,6 +2310,7 @@ const LIMIT_BOUNDS_BLOCKLIST_MB: (usize, usize) = (1, 2_048);
 const LIMIT_BOUNDS_UPLOAD_MB: (usize, usize) = (1, 512);
 const LIMIT_BOUNDS_QLOG_ROTATE_MB: (u64, u64) = (64, 65_536);
 const LIMIT_BOUNDS_QLOG_FREE_DISK_MB: (u64, u64) = (50, 1_024_000);
+const LIMIT_BOUNDS_STATS_ROTATE_MB: (u64, u64) = (16, 65_536);
 
 fn clamp_opt<T: PartialOrd + Copy>(
     name: &str,
@@ -2374,6 +2381,11 @@ fn validate_limits(cfg: &crate::config::LimitsConfig) -> Result<(), String> {
         cfg.query_log_free_disk_floor_mb,
         LIMIT_BOUNDS_QLOG_FREE_DISK_MB,
     )?;
+    clamp_opt(
+        "stats_rotate_mb",
+        cfg.stats_rotate_mb,
+        LIMIT_BOUNDS_STATS_ROTATE_MB,
+    )?;
     Ok(())
 }
 
@@ -2390,6 +2402,7 @@ fn limits_to_json(l: &crate::resources::ResourceLimits) -> serde_json::Value {
         "web_upload_max_mb": l.web_upload_max_bytes / (1024 * 1024),
         "query_log_rotate_mb": l.query_log_rotate_bytes / (1024 * 1024),
         "query_log_free_disk_floor_mb": l.query_log_free_disk_floor_bytes / (1024 * 1024),
+        "stats_rotate_mb": l.stats_rotate_bytes / (1024 * 1024),
     })
 }
 
@@ -2432,6 +2445,7 @@ async fn api_get_limits(
             "web_upload_max_mb": configured.web_upload_max_mb,
             "query_log_rotate_mb": configured.query_log_rotate_mb,
             "query_log_free_disk_floor_mb": configured.query_log_free_disk_floor_mb,
+            "stats_rotate_mb": configured.stats_rotate_mb,
         },
         "bounds": {
             "dns_cache_entries": LIMIT_BOUNDS_DNS_CACHE,
@@ -2445,6 +2459,7 @@ async fn api_get_limits(
             "web_upload_max_mb": LIMIT_BOUNDS_UPLOAD_MB,
             "query_log_rotate_mb": LIMIT_BOUNDS_QLOG_ROTATE_MB,
             "query_log_free_disk_floor_mb": LIMIT_BOUNDS_QLOG_FREE_DISK_MB,
+            "stats_rotate_mb": LIMIT_BOUNDS_STATS_ROTATE_MB,
         },
     }))
     .into_response()
@@ -2556,13 +2571,19 @@ struct LogSettingsResponse {
     /// Retention in minutes (canonical).  UIs can divide by 60 or 1440 to
     /// render hours or days as they prefer.
     query_log_retention_minutes: u32,
-    stats_retention_days: u32,
+    /// Whether persistent stats are currently being recorded.
+    stats_enabled: bool,
+    /// Stats retention in minutes (canonical).
+    stats_retention_minutes: u32,
     anonymize_client_ip: bool,
-    /// Informational: sizes of the active + archive DB files in bytes,
-    /// plus whether the archive currently exists.
+    /// Query log DB sizes (bytes).
     active_db_bytes: u64,
     archive_db_bytes: u64,
     archive_attached: bool,
+    /// Stats DB sizes (bytes).
+    stats_active_db_bytes: u64,
+    stats_archive_db_bytes: u64,
+    stats_archive_attached: bool,
 }
 
 async fn api_get_log_settings(
@@ -2573,13 +2594,17 @@ async fn api_get_log_settings(
     Ok(Json(LogSettingsResponse {
         query_log_enabled: state.query_log.is_enabled(),
         query_log_retention_minutes: *state.log_retention_minutes.read().await,
-        stats_retention_days: *state.stats_retention_days.read().await,
+        stats_enabled: state.persistent_stats.is_enabled(),
+        stats_retention_minutes: *state.stats_retention_minutes.read().await,
         anonymize_client_ip: state
             .anonymize_ip
             .load(std::sync::atomic::Ordering::Relaxed),
         active_db_bytes: state.query_log.active_db_size(),
         archive_db_bytes: state.query_log.archive_db_size(),
         archive_attached: state.query_log.archive_is_attached(),
+        stats_active_db_bytes: state.persistent_stats.active_db_size(),
+        stats_archive_db_bytes: state.persistent_stats.archive_db_size(),
+        stats_archive_attached: state.persistent_stats.archive_is_attached(),
     }))
 }
 
@@ -2593,6 +2618,10 @@ struct LogSettingsRequest {
     /// to minutes on the server.
     #[serde(default)]
     query_log_retention_days: Option<u32>,
+    #[serde(default)]
+    stats_enabled: Option<bool>,
+    #[serde(default)]
+    stats_retention_minutes: Option<u32>,
     #[serde(default)]
     stats_retention_days: Option<u32>,
     #[serde(default)]
@@ -2619,10 +2648,18 @@ async fn api_set_log_settings(
         *state.log_retention_minutes.write().await = clamped;
         info!("Query log retention set to {} minutes", clamped);
     }
-    if let Some(days) = req.stats_retention_days {
-        let clamped = days.clamp(1, 365);
-        *state.stats_retention_days.write().await = clamped;
-        info!("Stats retention set to {} days", clamped);
+    if let Some(enabled) = req.stats_enabled {
+        state.persistent_stats.set_enabled(enabled);
+    }
+    let stats_minutes = req
+        .stats_retention_minutes
+        .or_else(|| req.stats_retention_days.map(|d| d.saturating_mul(1440)));
+    if let Some(m) = stats_minutes {
+        // Lower bound 60 min because the stats schema is hour-granular;
+        // upper bound 365 days.
+        let clamped = m.clamp(60, 365 * 1440);
+        *state.stats_retention_minutes.write().await = clamped;
+        info!("Stats retention set to {} minutes", clamped);
     }
     if let Some(anonymize) = req.anonymize_client_ip {
         state
@@ -2653,6 +2690,31 @@ async fn api_clear_logs(
     }
     match state.query_log.clear_all().await {
         Ok(()) => Json(serde_json::json!({ "success": true })).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": format!("{}", e) })),
+        )
+            .into_response(),
+    }
+}
+
+/// Delete every row from the stats DB (hourly aggregates + domain counts),
+/// drop the archive file, and clear the in-memory buffer.  Live counters
+/// on the dashboard reset to zero.
+async fn api_clear_stats(
+    axum::Extension(user): axum::Extension<AuthenticatedUser>,
+    State(state): State<AppState>,
+) -> Response {
+    if !user.permissions.contains(&Permission::ManageSystem) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    match state.persistent_stats.clear_all().await {
+        Ok(()) => {
+            // Also reset the in-memory live counters so the dashboard cards
+            // aren't showing stale sums after a wipe.
+            state.stats.reset().await;
+            Json(serde_json::json!({ "success": true })).into_response()
+        }
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": format!("{}", e) })),

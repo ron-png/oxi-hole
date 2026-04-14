@@ -314,6 +314,15 @@
             padding: 20px;
         }
 
+        .stat-card-range {
+            text-transform: none;
+            letter-spacing: 0;
+            color: var(--text-muted);
+            font-size: 11px;
+            margin-left: 4px;
+            opacity: 0.75;
+        }
+
         .stat-card .label {
             font-size: 12px;
             color: var(--text-muted);
@@ -412,6 +421,198 @@
             grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
             gap: 16px;
             margin-bottom: 32px;
+        }
+
+        /* ---- Historical statistics section ---- */
+
+        .history-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 16px;
+            margin-bottom: 16px;
+            flex-wrap: wrap;
+        }
+
+        .history-header h2 {
+            margin: 0;
+        }
+
+        .history-range {
+            display: inline-flex;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            overflow: hidden;
+            background: var(--bg-page);
+        }
+
+        .history-range-btn {
+            background: transparent;
+            color: var(--text-secondary);
+            border: 0;
+            padding: 6px 14px;
+            font-size: 13px;
+            cursor: pointer;
+            font-family: inherit;
+        }
+
+        .history-range-btn + .history-range-btn {
+            border-left: 1px solid var(--border);
+        }
+
+        .history-range-btn.active {
+            background: var(--accent-primary, #4f46e5);
+            color: #fff;
+        }
+
+        .history-range-btn:not(.active):hover {
+            background: var(--bg-subtle);
+        }
+
+        .history-summary-row {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 12px;
+            margin-bottom: 20px;
+        }
+
+        .history-summary-card {
+            background: var(--bg-page);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 12px 16px;
+        }
+
+        .history-summary-card .label {
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: var(--text-muted);
+            margin-bottom: 4px;
+        }
+
+        .history-summary-card .value {
+            font-size: 22px;
+            font-weight: 600;
+            font-family: var(--font-mono);
+        }
+
+        .history-summary-card .value.blocked {
+            color: var(--accent-danger, #dc2626);
+        }
+
+        .history-summary-card .value.pct {
+            color: var(--accent-warning, #d97706);
+        }
+
+        .history-chart-wrapper {
+            margin-bottom: 20px;
+        }
+
+        .history-chart-title {
+            font-size: 12px;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            margin-bottom: 6px;
+        }
+
+        .history-chart {
+            width: 100%;
+            min-height: 180px;
+            background: var(--bg-page);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 12px;
+            display: flex;
+            align-items: flex-end;
+            gap: 2px;
+            overflow-x: auto;
+        }
+
+        .history-chart svg {
+            width: 100%;
+            height: 160px;
+        }
+
+        .history-chart-legend {
+            margin-top: 8px;
+            font-size: 12px;
+            color: var(--text-muted);
+            display: flex;
+            gap: 14px;
+            align-items: center;
+        }
+
+        .history-chart-legend .swatch {
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            border-radius: 2px;
+            margin-right: 4px;
+            vertical-align: middle;
+        }
+
+        .history-chart-legend .swatch-total { background: var(--accent-primary, #4f46e5); }
+        .history-chart-legend .swatch-blocked { background: var(--accent-danger, #dc2626); }
+
+        .history-tables {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+            gap: 16px;
+        }
+
+        .history-table h3 {
+            margin: 0 0 8px 0;
+            font-size: 14px;
+            color: var(--text-secondary);
+        }
+
+        .history-table table {
+            width: 100%;
+            border-collapse: collapse;
+            background: var(--bg-page);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            overflow: hidden;
+            font-size: 13px;
+        }
+
+        .history-table th,
+        .history-table td {
+            padding: 8px 12px;
+            text-align: left;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .history-table tr:last-child td {
+            border-bottom: 0;
+        }
+
+        .history-table th {
+            background: var(--bg-subtle);
+            font-weight: 600;
+            color: var(--text-muted);
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+        }
+
+        .history-table .num {
+            text-align: right;
+            font-family: var(--font-mono);
+        }
+
+        .history-bar-tooltip {
+            position: absolute;
+            background: var(--bg-subtle);
+            border: 1px solid var(--border);
+            padding: 6px 10px;
+            border-radius: 4px;
+            font-size: 12px;
+            pointer-events: none;
+            z-index: 10;
+            white-space: nowrap;
         }
 
         .feature-card {
@@ -2173,21 +2374,22 @@
             <pre id="updateLogs"
                 style="display: none; margin-top: 10px; padding: 10px; background: var(--card-bg); border-radius: 6px; max-height: 300px; overflow-y: auto; font-size: 12px; white-space: pre-wrap; word-break: break-all;"></pre>
         </div>
-        <!-- Stats (always visible) -->
+        <!-- Stats (always visible).  Total/Blocked/Block-Rate follow the
+             time range selected in the Statistics Over Time section below.
+             Blocklist size + cache stats stay live (they are current-state
+             values with no meaningful "range"). -->
         <div class="stats-grid">
             <div class="stat-card">
-                <div class="label" data-tooltip="Total number of DNS queries received since the server started.">Total
-                    Queries</div>
-                <div class="value" id="totalQueries">0</div>
+                <div class="label" data-tooltip="Total DNS queries during the selected time range. Change the range in the Statistics Over Time section below.">Total Queries <span id="totalQueriesRange" class="stat-card-range">(7d)</span></div>
+                <div class="value" id="totalQueries">—</div>
             </div>
             <div class="stat-card">
-                <div class="label" data-tooltip="Number of queries that matched a blocklist and were blocked.">Blocked
-                    Queries</div>
-                <div class="value blocked" id="blockedQueries">0</div>
+                <div class="label" data-tooltip="Queries blocked during the selected time range.">Blocked Queries <span id="blockedQueriesRange" class="stat-card-range">(7d)</span></div>
+                <div class="value blocked" id="blockedQueries">—</div>
             </div>
             <div class="stat-card">
-                <div class="label" data-tooltip="Percentage of all queries that were blocked.">Block Rate</div>
-                <div class="value pct" id="blockPct">0.0%</div>
+                <div class="label" data-tooltip="Percentage of queries that were blocked during the selected time range.">Block Rate <span id="blockPctRange" class="stat-card-range">(7d)</span></div>
+                <div class="value pct" id="blockPct">—</div>
             </div>
             <div class="stat-card">
                 <div class="label" data-tooltip="Total number of unique domains loaded from all active blocklists.">
@@ -2210,6 +2412,55 @@
 
         <!-- ==================== SIMPLE MODE ==================== -->
         <div id="panelSimple" class="panel active">
+
+            <!-- Historical statistics: time-range selector, summary card,
+                 hourly/daily bar chart, top-queried and top-blocked tables.
+                 All backed by /api/stats/history, /api/stats/summary, and
+                 /api/stats/top-domains. -->
+            <div class="section" id="historySection">
+                <div class="history-header">
+                    <h2>Statistics Over Time</h2>
+                    <div class="history-range" role="group" aria-label="Time range">
+                        <button type="button" class="history-range-btn" data-range="1d">24 h</button>
+                        <button type="button" class="history-range-btn active" data-range="7d">7 d</button>
+                        <button type="button" class="history-range-btn" data-range="30d">30 d</button>
+                        <button type="button" class="history-range-btn" data-range="90d">90 d</button>
+                    </div>
+                </div>
+
+                <div class="history-chart-wrapper">
+                    <div class="history-chart-title" id="historyChartTitle">Queries per hour</div>
+                    <div class="history-chart" id="historyChart" aria-label="Queries over time">
+                        <span style="color: var(--text-muted); font-size: 13px;">Loading...</span>
+                    </div>
+                    <div class="history-chart-legend">
+                        <span class="swatch swatch-total"></span> Allowed
+                        <span class="swatch swatch-blocked"></span> Blocked
+                    </div>
+                </div>
+
+                <div class="history-tables">
+                    <div class="history-table">
+                        <h3>Top queried domains</h3>
+                        <table>
+                            <thead>
+                                <tr><th>Domain</th><th class="num">Queries</th></tr>
+                            </thead>
+                            <tbody id="topQueriedBody"><tr><td colspan="2">Loading...</td></tr></tbody>
+                        </table>
+                    </div>
+                    <div class="history-table">
+                        <h3>Top blocked domains</h3>
+                        <table>
+                            <thead>
+                                <tr><th>Domain</th><th class="num">Blocks</th></tr>
+                            </thead>
+                            <tbody id="topBlockedBody"><tr><td colspan="2">Loading...</td></tr></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
             <div class="features-grid" id="featuresGrid">
                 <!-- Populated by JS -->
             </div>
@@ -2263,10 +2514,17 @@
                                 </select>
                             </label>
                             <label>
-                                Statistics retention:
-                                <input type="number" id="statsRetentionInput" min="1" max="365" value="90"
+                                <input type="checkbox" id="statsEnabledCheckbox" onchange="saveLogSettings()">
+                                Record stats
+                            </label>
+                            <label>
+                                Stats retention:
+                                <input type="number" id="statsRetentionInput" min="1" value="90"
                                     oninput="debouncedSaveLogSettings()" onchange="saveLogSettings()">
-                                days
+                                <select id="statsRetentionUnit" onchange="saveLogSettings()">
+                                    <option value="hours">hours</option>
+                                    <option value="days" selected>days</option>
+                                </select>
                             </label>
                             <span class="logs-db-info" id="logsDbInfo" style="margin-left: auto; color: var(--text-muted); font-family: var(--font-mono); font-size: 12px;"></span>
                             <label>
@@ -2274,6 +2532,7 @@
                                 Anonymize client IPs
                             </label>
                             <button type="button" class="btn btn-danger btn-sm manage-system-only" onclick="confirmClearLogs()">Delete All Logs</button>
+                            <button type="button" class="btn btn-danger btn-sm manage-system-only" onclick="confirmClearStats()">Delete All Stats</button>
                         </div>
 
                         <div class="logs-controls">
@@ -3524,12 +3783,14 @@
 
         // ---- Stats ----
         async function refreshStats() {
+            // Total / Blocked / Block-rate cards are now driven by
+            // refreshHistory() using the persistent stats DB and the
+            // user-selected time range. This handler only keeps the
+            // state-right-now fields (blocklist size + master toggle)
+            // fresh via the fast 2 s poll.
             try {
                 const res = await fetch('/api/stats');
                 const s = await res.json();
-                document.getElementById('totalQueries').textContent = s.total_queries.toLocaleString();
-                document.getElementById('blockedQueries').textContent = s.blocked_queries.toLocaleString();
-                document.getElementById('blockPct').textContent = s.block_percentage.toFixed(1) + '%';
                 document.getElementById('blocklistSize').textContent = s.blocklist_size.toLocaleString();
                 const btn = document.getElementById('masterToggle');
                 btn.textContent = 'Protection: ' + (s.blocking_enabled ? 'ON' : 'OFF');
@@ -5074,7 +5335,8 @@
             ['blocklist_max_mb',               'Blocklist download cap',    'MB',       'Max size per downloaded list'],
             ['web_upload_max_mb',              'Web upload cap',            'MB',       'Max cert/key/p12 upload'],
             ['query_log_rotate_mb',            'Query log rotate size',     'MB',       'Active DB rotates to archive when larger'],
-            ['query_log_free_disk_floor_mb',   'Query log free-disk floor', 'MB',       'Emergency purge when free disk below this'],
+            ['query_log_free_disk_floor_mb',   'Free-disk floor (shared)',  'MB',       'Emergency purge for log+stats when free disk below this'],
+            ['stats_rotate_mb',                'Stats rotate size',         'MB',       'Active stats DB rotates to archive when larger'],
         ];
 
         // Cached auto-scaled values so resetLimitsForm() can fill placeholders
@@ -5830,6 +6092,16 @@
             return mb < 1 ? (bytes / 1024).toFixed(0) + ' KB' : mb.toFixed(1) + ' MB';
         }
 
+        // Stats schema has hour precision, so minutes aren't meaningful.
+        // Only surface hours / days in the stats unit dropdown.
+        function minutesToStatsUnit(minutes) {
+            if (minutes % 1440 === 0 && minutes >= 1440) {
+                return { value: minutes / 1440, unit: 'days' };
+            }
+            const hours = Math.max(1, Math.round(minutes / 60));
+            return { value: hours, unit: 'hours' };
+        }
+
         async function refreshLogSettings() {
             try {
                 const res = await fetch('/api/logs/settings');
@@ -5838,17 +6110,25 @@
                 const { value, unit } = minutesToFriendlyUnit(data.query_log_retention_minutes || 10080);
                 document.getElementById('logRetentionInput').value = value;
                 document.getElementById('logRetentionUnit').value = unit;
-                document.getElementById('statsRetentionInput').value = data.stats_retention_days;
+
+                document.getElementById('statsEnabledCheckbox').checked = !!data.stats_enabled;
+                const stats = minutesToStatsUnit(data.stats_retention_minutes || 129600);
+                document.getElementById('statsRetentionInput').value = stats.value;
+                document.getElementById('statsRetentionUnit').value = stats.unit;
+
                 document.getElementById('logAnonIpCheckbox').checked = data.anonymize_client_ip;
 
                 const info = document.getElementById('logsDbInfo');
                 if (info) {
-                    const active = formatBytesMB(data.active_db_bytes);
-                    const parts = ['active ' + active];
+                    const logParts = ['log-active ' + formatBytesMB(data.active_db_bytes)];
                     if (data.archive_attached && data.archive_db_bytes > 0) {
-                        parts.push('archive ' + formatBytesMB(data.archive_db_bytes));
+                        logParts.push('log-archive ' + formatBytesMB(data.archive_db_bytes));
                     }
-                    info.textContent = 'DB: ' + parts.join(' · ');
+                    const statsParts = ['stats-active ' + formatBytesMB(data.stats_active_db_bytes)];
+                    if (data.stats_archive_attached && data.stats_archive_db_bytes > 0) {
+                        statsParts.push('stats-archive ' + formatBytesMB(data.stats_archive_db_bytes));
+                    }
+                    info.textContent = 'DBs: ' + logParts.concat(statsParts).join(' · ');
                 }
             } catch (e) { console.error('Failed to load log settings', e); }
         }
@@ -5869,7 +6149,13 @@
             let query_log_retention_minutes = rawNum;
             if (unit === 'hours') query_log_retention_minutes = rawNum * 60;
             else if (unit === 'days') query_log_retention_minutes = rawNum * 1440;
-            const stats_retention_days = parseInt(document.getElementById('statsRetentionInput').value, 10);
+
+            const stats_enabled = document.getElementById('statsEnabledCheckbox').checked;
+            const statsNum = parseInt(document.getElementById('statsRetentionInput').value, 10);
+            const statsUnit = document.getElementById('statsRetentionUnit').value;
+            let stats_retention_minutes = statsNum * 60;            // hours default
+            if (statsUnit === 'days') stats_retention_minutes = statsNum * 1440;
+
             const anonymize_client_ip = document.getElementById('logAnonIpCheckbox').checked;
             try {
                 await fetch('/api/logs/settings', {
@@ -5878,13 +6164,32 @@
                     body: JSON.stringify({
                         query_log_enabled,
                         query_log_retention_minutes,
-                        stats_retention_days,
+                        stats_enabled,
+                        stats_retention_minutes,
                         anonymize_client_ip,
                     })
                 });
                 // Reload the reported state so the DB-size badge refreshes.
                 refreshLogSettings();
             } catch (e) { console.error('Failed to save log settings', e); }
+        }
+
+        async function confirmClearStats() {
+            if (!confirm('Delete ALL statistics?\n\nThis wipes hourly aggregates, top-domain counts, and the live dashboard counters. The archive file is also removed. Settings (retention, enabled, etc.) are preserved. This cannot be undone.')) {
+                return;
+            }
+            try {
+                const res = await fetch('/api/stats/clear', { method: 'POST' });
+                if (!res.ok) {
+                    const err = await res.json().catch(() => ({ error: res.statusText }));
+                    alert('Delete failed: ' + (err.error || res.statusText));
+                    return;
+                }
+                if (typeof refreshStats === 'function') refreshStats();
+                refreshLogSettings();
+            } catch (e) {
+                alert('Delete failed: ' + e.message);
+            }
         }
 
         async function confirmClearLogs() {
@@ -5906,6 +6211,186 @@
             } catch (e) {
                 alert('Delete failed: ' + e.message);
             }
+        }
+
+        // ---- Historical Statistics ----
+        //
+        // Backed by three existing endpoints that the dashboard hadn't been
+        // consuming: /api/stats/history, /api/stats/summary, /api/stats/top-domains.
+        // Rendered as: summary cards, inline-SVG bar chart, two tables.
+
+        const HISTORY_RANGES = {
+            '1d':  { days: 1,  apiPeriod: '24h', bucket: 'hour', title: 'Queries per hour (last 24 h)' },
+            '7d':  { days: 7,  apiPeriod: '7d',  bucket: 'day',  title: 'Queries per day (last 7 d)' },
+            '30d': { days: 30, apiPeriod: '30d', bucket: 'day',  title: 'Queries per day (last 30 d)' },
+            '90d': { days: 90, apiPeriod: '90d', bucket: 'day',  title: 'Queries per day (last 90 d)' },
+        };
+
+        let historyCurrentRange = '7d';
+        // Throttle the full refresh (history chart + top domains). The
+        // top-of-page summary cards refresh on their own, faster cadence
+        // via refreshHistorySummary().
+        let historyLastRefresh = 0;
+        const HISTORY_MIN_REFRESH_MS = 15_000;
+
+        function historyRangeLabel() {
+            const map = { '1d': '(24h)', '7d': '(7d)', '30d': '(30d)', '90d': '(90d)' };
+            return map[historyCurrentRange] || '';
+        }
+
+        function updateStatsCardRangeLabels() {
+            const label = historyRangeLabel();
+            ['totalQueriesRange', 'blockedQueriesRange', 'blockPctRange'].forEach(id => {
+                const el = document.getElementById(id);
+                if (el) el.textContent = label;
+            });
+        }
+
+        // Fetch only the summary (fast query) and update the three top cards.
+        // Called at the same 2 s cadence as refreshStats so the "Queries in
+        // last X" numbers feel live as new traffic comes in.
+        async function refreshHistorySummary() {
+            const range = HISTORY_RANGES[historyCurrentRange] || HISTORY_RANGES['7d'];
+            try {
+                const res = await fetch(`/api/stats/summary?days=${range.days}`);
+                if (!res.ok) return;
+                const s = await res.json();
+                document.getElementById('totalQueries').textContent = (s.total_queries || 0).toLocaleString();
+                document.getElementById('blockedQueries').textContent = (s.blocked_queries || 0).toLocaleString();
+                document.getElementById('blockPct').textContent =
+                    (s.block_percentage || 0).toFixed(1) + '%';
+            } catch (e) { /* best-effort — the main refreshHistory retries */ }
+        }
+
+        // --- Aggregation: hourly buckets → daily buckets when the range
+        // crosses the 1-day boundary. Keeps the chart readable.
+        function aggregateHourlyToDaily(hourly) {
+            const byDay = new Map();
+            for (const h of hourly) {
+                // h.hour format: "YYYY-MM-DDTHH:00:00"
+                const day = h.hour.slice(0, 10);
+                const cur = byDay.get(day) || { day, total: 0, blocked: 0 };
+                cur.total += h.total || 0;
+                cur.blocked += h.blocked || 0;
+                byDay.set(day, cur);
+            }
+            return Array.from(byDay.values()).sort((a, b) => a.day.localeCompare(b.day));
+        }
+
+        function formatNumber(n) {
+            if (n == null) return '—';
+            if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M';
+            if (n >= 1_000) return (n / 1_000).toFixed(1) + 'k';
+            return String(n);
+        }
+
+        // Inline SVG bar chart. We render to a fixed 1000×160 viewBox so the
+        // chart scales fluidly with container width via `preserveAspectRatio`.
+        function renderHistoryChart(bars, bucketKind) {
+            const el = document.getElementById('historyChart');
+            if (!el) return;
+            if (!bars.length) {
+                el.innerHTML = '<span style="color: var(--text-muted); font-size: 13px;">No data in this range yet.</span>';
+                return;
+            }
+            const W = 1000, H = 160, TOP = 4, BOTTOM = 22;
+            const plotH = H - TOP - BOTTOM;
+            const maxTotal = Math.max(1, ...bars.map(b => b.total));
+            const gap = 2;
+            const barW = Math.max(1, (W - gap * (bars.length - 1)) / bars.length);
+
+            let svg = `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img">`;
+            // Gridline at top of plot area
+            svg += `<line x1="0" y1="${TOP}" x2="${W}" y2="${TOP}" stroke="currentColor" stroke-opacity="0.08"/>`;
+
+            bars.forEach((b, i) => {
+                const x = i * (barW + gap);
+                const totalH = (b.total / maxTotal) * plotH;
+                const blockedH = (b.blocked / maxTotal) * plotH;
+                const topY = TOP + (plotH - totalH);
+                // Stacked: total bar, then blocked bar overlaid at the bottom.
+                svg += `<rect x="${x.toFixed(2)}" y="${topY.toFixed(2)}" width="${barW.toFixed(2)}" height="${totalH.toFixed(2)}" fill="var(--accent-primary, #4f46e5)" opacity="0.85"><title>${b.label}\nTotal: ${b.total}\nBlocked: ${b.blocked}</title></rect>`;
+                if (b.blocked > 0) {
+                    svg += `<rect x="${x.toFixed(2)}" y="${(TOP + plotH - blockedH).toFixed(2)}" width="${barW.toFixed(2)}" height="${blockedH.toFixed(2)}" fill="var(--accent-danger, #dc2626)"><title>${b.label}\nBlocked: ${b.blocked}</title></rect>`;
+                }
+            });
+
+            // X-axis tick labels: first, middle, last
+            const ticks = [0, Math.floor(bars.length / 2), bars.length - 1];
+            const seen = new Set();
+            ticks.forEach(i => {
+                if (seen.has(i) || !bars[i]) return;
+                seen.add(i);
+                const x = i * (barW + gap) + barW / 2;
+                const label = bucketKind === 'hour'
+                    ? (bars[i].label || '').slice(11, 13) + ':00'
+                    : (bars[i].label || '').slice(5); // MM-DD
+                svg += `<text x="${x.toFixed(2)}" y="${H - 6}" text-anchor="middle" font-size="10" fill="var(--text-muted)">${label}</text>`;
+            });
+            svg += '</svg>';
+            el.innerHTML = svg;
+        }
+
+        function renderDomainTable(tbodyId, rows, valueKey) {
+            const body = document.getElementById(tbodyId);
+            if (!body) return;
+            if (!rows.length) {
+                body.innerHTML = '<tr><td colspan="2" style="color: var(--text-muted);">No data yet.</td></tr>';
+                return;
+            }
+            body.innerHTML = rows.map(r => {
+                const domain = (r.domain || '').replace(/[<>&"]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c]));
+                return `<tr><td>${domain}</td><td class="num">${formatNumber(r[valueKey] ?? r.count)}</td></tr>`;
+            }).join('');
+        }
+
+        async function refreshHistory(force) {
+            const now = Date.now();
+            if (!force && (now - historyLastRefresh) < HISTORY_MIN_REFRESH_MS) return;
+            historyLastRefresh = now;
+
+            const range = HISTORY_RANGES[historyCurrentRange] || HISTORY_RANGES['7d'];
+            document.getElementById('historyChartTitle').textContent = range.title;
+            updateStatsCardRangeLabels();
+
+            // Summary hits the top-of-page cards; history + top-domains
+            // populate the section below. All three in parallel.
+            const summaryP = fetch(`/api/stats/summary?days=${range.days}`).then(r => r.ok ? r.json() : null).catch(() => null);
+            const historyP = fetch(`/api/stats/history?period=${range.apiPeriod}`).then(r => r.ok ? r.json() : null).catch(() => null);
+            const topP = fetch(`/api/stats/top-domains?days=${range.days}&limit=10`).then(r => r.ok ? r.json() : null).catch(() => null);
+
+            const [summary, history, top] = await Promise.all([summaryP, historyP, topP]);
+
+            if (summary) {
+                document.getElementById('totalQueries').textContent = (summary.total_queries || 0).toLocaleString();
+                document.getElementById('blockedQueries').textContent = (summary.blocked_queries || 0).toLocaleString();
+                document.getElementById('blockPct').textContent =
+                    (summary.block_percentage || 0).toFixed(1) + '%';
+            }
+
+            if (history && Array.isArray(history.data)) {
+                const hourly = history.data;
+                const bars = range.bucket === 'hour'
+                    ? hourly.map(h => ({ label: h.hour, total: h.total, blocked: h.blocked }))
+                    : aggregateHourlyToDaily(hourly).map(d => ({ label: d.day, total: d.total, blocked: d.blocked }));
+                renderHistoryChart(bars, range.bucket);
+            }
+
+            if (top) {
+                renderDomainTable('topQueriedBody', top.top_queried || [], 'count');
+                renderDomainTable('topBlockedBody', top.top_blocked || [], 'count');
+            }
+        }
+
+        function initHistoryRangeButtons() {
+            document.querySelectorAll('.history-range-btn').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    document.querySelectorAll('.history-range-btn').forEach(b => b.classList.remove('active'));
+                    btn.classList.add('active');
+                    historyCurrentRange = btn.dataset.range;
+                    refreshHistory(true);
+                });
+            });
         }
 
         // ---- Cache Stats ----
@@ -6145,8 +6630,20 @@
             refreshCustomBlocked();
             refreshAllowlist();
             refreshCacheStats();
+            initHistoryRangeButtons();
+            refreshHistory(true);
         });
-        setInterval(() => { refreshStats(); refreshQueries(); refreshCacheStats(); }, 2000);
+        setInterval(() => {
+            refreshStats();
+            refreshQueries();
+            refreshCacheStats();
+            // Cheap query — keeps the three range-scoped top cards feeling
+            // live as new traffic comes in.
+            refreshHistorySummary();
+        }, 2000);
+        // Expensive parts of the history section (chart + top-domain tables)
+        // refresh on a slower cadence.
+        setInterval(() => refreshHistory(false), 15_000);
         setInterval(pollUpdateStatus, 5000);
     </script>
 </body>

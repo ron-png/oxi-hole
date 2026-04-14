@@ -471,8 +471,12 @@ Automatic certificate management via Let's Encrypt (or compatible CA).
 | `query_log_enabled` | bool | `true` | Master on/off for query logging. When `false`, no new entries are recorded (existing rows remain). Toggled live from the web UI. |
 | `query_log_retention_minutes` | integer | `10080` (= 7 days) | Retention in minutes. Canonical field — the web UI always writes this one. Sub-day retention (e.g. `720` = 12 hours) is supported; the purge task runs every minute. |
 | `query_log_retention_days` | integer | *(legacy)* | Legacy day-based retention. Kept for back-compat with hand-edited configs. Auto-migrated to `_minutes` at startup; cleared when the web UI next saves. |
-| `stats_retention_days` | integer | `90` | Days to keep historical statistics. |
+| `stats_enabled` | bool | `true` | Master on/off for persistent statistics (hourly aggregates + per-domain counts). When `false`, `Stats::record` short-circuits and `/api/stats/history` etc. no longer accumulate. Live totals on the dashboard also stop advancing. Existing rows are preserved. |
+| `stats_retention_minutes` | integer | `129600` (= 90 days) | Stats retention in minutes. Canonical field — the web UI always writes this one. The stats schema is hour-granular so values below 60 minutes round up; the enforced floor is 60. |
+| `stats_retention_days` | integer | *(legacy)* | Legacy day-based stats retention. Auto-migrated to `stats_retention_minutes` at startup. |
 | `anonymize_client_ip` | bool | `false` | Anonymize client IPs in the query log (e.g. `192.168.1.100` becomes `192.168.1.0`). |
+
+Both the query log and the stats DB run the same rotation/emergency-purge logic: when the active DB grows past its `*_rotate_mb` limit, older rows are moved into a sibling archive (`query_log_archive.db` / `stats_archive.db`) and remain visible in the UI via transparent UNION queries. Only when free disk on their shared filesystem falls below `query_log_free_disk_floor_mb` does anything get deleted — archives first, then a 25 % trim of the active DBs if space is still critical.
 
 Query log rotation is controlled by the two `query_log_*` entries in `[limits]` below.  When the active DB grows past `query_log_rotate_mb`, the oldest half of its rows are moved into a sibling `query_log_archive.db` (still visible in the UI via transparent UNION).  Only when free disk on the log's filesystem falls below `query_log_free_disk_floor_mb` is any data actually deleted — first the archive, then a 25 % trim of the active DB if space is still critical.
 
@@ -501,7 +505,8 @@ auto-scaling.  All memory values are interpreted as mebibytes (1 MB = 1024×1024
 | `blocklist_max_mb` | integer | `ram_mb ÷ 8` | `50` | `500` | Max size (MB) of a single downloaded or on-disk blocklist. Sources that exceed this are refused. |
 | `web_upload_max_mb` | integer | `ram_mb ÷ 64` | `2` | `50` | Max size (MB) for web-admin uploads (TLS cert / key / PKCS#12 bundles). |
 | `query_log_rotate_mb` | integer | fixed `2048` | `64` | `65 536` | Size threshold at which the query log rotates older rows into `query_log_archive.db`. Data is preserved; UI still sees it. |
-| `query_log_free_disk_floor_mb` | integer | fixed `500` | `50` | `1 024 000` | Minimum free disk to keep on the query log's filesystem. Below this, emergency purge kicks in (drops archive, then trims active DB). |
+| `query_log_free_disk_floor_mb` | integer | fixed `500` | `50` | `1 024 000` | Minimum free disk to keep on the query log's filesystem. Below this, emergency purge kicks in (drops both archives, then trims both actives as last resort). Shared floor: applies to the stats DB too. |
+| `stats_rotate_mb` | integer | fixed `512` | `16` | `65 536` | Size threshold at which the stats DB rotates older rows into `stats_archive.db`. |
 
 Example — a tiny VPS where you want a smaller cache and stricter upload cap:
 
@@ -579,7 +584,8 @@ release_channel = "stable"
 [log]
 query_log_enabled = true
 query_log_retention_minutes = 10080   # 7 days
-stats_retention_days = 90
+stats_enabled = true
+stats_retention_minutes = 129600      # 90 days
 anonymize_client_ip = false
 
 # [limits]  — every key is optional; unset keys auto-scale from detected hardware
@@ -595,6 +601,7 @@ anonymize_client_ip = false
 # web_upload_max_mb = 10
 # query_log_rotate_mb = 2048
 # query_log_free_disk_floor_mb = 500
+# stats_rotate_mb = 512
 ```
 
 ## System logs
@@ -643,6 +650,8 @@ oxi-dns [CONFIG_PATH] [OPTIONS]
 | `--version`, `-V` | Print `oxi-dns <version>` and exit. |
 | `--health-check` | Load the config, build the upstream client, issue a local DNS query end-to-end, and exit `0` on success. Intended for systemd `ExecStartPre` / graceful-restart health checks; a 30 s timeout aborts hung checks. |
 | `--reconfigure KEY=VALUE …` | Apply one or more network-listener changes and restart the service (requires root). See [Reconfigure](#reconfigure) below for the accepted keys. Any number of `key=value` pairs may follow the flag. |
+| `--check-update` | Query GitHub for the latest release on the configured channel (from `config.toml`'s `system.release_channel`) and print the result. Exits `0` if up to date, `1` if an update is available, `2` if the check failed. No writes, no restart — safe to wire into cron. |
+| `-u, --update` | Download the latest release, run `--health-check` on the new binary, replace the installed binary, and trigger a graceful restart (`systemctl restart oxi-dns` when systemd is detected). Requires write access to the installed binary — usually root. |
 | `--takeover` | Marker used by the in-process graceful-restart flow to tell a freshly spawned child that it's taking over from a running parent. `SO_REUSEPORT` makes the hand-off seamless; the flag itself is a no-op beyond signalling intent. Not intended for manual use. |
 | `--ready-file PATH` | Write-path used together with `--takeover`: when the child has successfully bound its listeners, it touches `PATH` to tell the parent process it's ready to replace it. Not intended for manual use. |
 
@@ -657,6 +666,12 @@ oxi-dns /etc/oxi-dns/custom.toml
 
 # Run the health check (used by the graceful-restart flow)
 oxi-dns --health-check
+
+# Check whether a newer release is published (non-destructive)
+oxi-dns --check-update
+
+# Download, health-check, install, and restart
+sudo oxi-dns --update
 ```
 
 ## Reconfigure

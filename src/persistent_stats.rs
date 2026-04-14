@@ -2,9 +2,10 @@ use chrono::Utc;
 use rusqlite::params;
 use serde::Serialize;
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use tracing::info;
+use tracing::{info, warn};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct HourlyStat {
@@ -70,11 +71,28 @@ impl StatsBuffer {
     }
 }
 
+fn archive_path_for(active: &Path) -> PathBuf {
+    let parent = active.parent().unwrap_or_else(|| Path::new("."));
+    let stem = active
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("stats");
+    parent.join(format!("{}_archive.db", stem))
+}
+
 /// Persistent statistics store backed by SQLite.
+///
+/// Mirrors the query-log design: an active DB receives inserts, rotation
+/// moves the oldest rows into `stats_archive.db`, and the API transparently
+/// reads the UNION of both so the UI sees a continuous history.
 #[derive(Clone)]
 pub struct PersistentStats {
     conn: Arc<tokio_rusqlite::Connection>,
     buffer: Arc<Mutex<StatsBuffer>>,
+    enabled: Arc<AtomicBool>,
+    active_path: PathBuf,
+    archive_path: PathBuf,
+    archive_attached: Arc<AtomicBool>,
 }
 
 impl PersistentStats {
@@ -107,15 +125,75 @@ impl PersistentStats {
         })
         .await?;
 
+        let active_path = path.to_path_buf();
+        let archive_path = archive_path_for(path);
+        let archive_attached = Arc::new(AtomicBool::new(false));
+
+        if archive_path.exists() {
+            let ap = archive_path.clone();
+            let attached = archive_attached.clone();
+            let attach_result = conn
+                .call(move |conn| {
+                    conn.execute_batch(&format!("ATTACH DATABASE '{}' AS archive;", ap.display()))?;
+                    Ok(())
+                })
+                .await;
+            match attach_result {
+                Ok(()) => {
+                    attached.store(true, Ordering::Relaxed);
+                    info!("Attached stats archive at {}", archive_path.display());
+                }
+                Err(e) => warn!("Failed to attach stats archive: {}", e),
+            }
+        }
+
         info!("Persistent stats database opened at {}", path.display());
         Ok(Self {
             conn: Arc::new(conn),
             buffer: Arc::new(Mutex::new(StatsBuffer::new())),
+            enabled: Arc::new(AtomicBool::new(true)),
+            active_path,
+            archive_path,
+            archive_attached,
         })
     }
 
+    pub fn set_enabled(&self, enabled: bool) {
+        let prev = self.enabled.swap(enabled, Ordering::Relaxed);
+        if prev != enabled {
+            info!(
+                "Persistent stats {}",
+                if enabled { "enabled" } else { "disabled" }
+            );
+        }
+    }
+
+    pub fn is_enabled(&self) -> bool {
+        self.enabled.load(Ordering::Relaxed)
+    }
+
+    pub fn archive_is_attached(&self) -> bool {
+        self.archive_attached.load(Ordering::Relaxed)
+    }
+
+    pub fn active_db_size(&self) -> u64 {
+        std::fs::metadata(&self.active_path)
+            .map(|m| m.len())
+            .unwrap_or(0)
+    }
+
+    pub fn archive_db_size(&self) -> u64 {
+        std::fs::metadata(&self.archive_path)
+            .map(|m| m.len())
+            .unwrap_or(0)
+    }
+
     /// Record a DNS query. Non-blocking: just updates the in-memory buffer.
+    /// Short-circuits when stats recording is disabled.
     pub fn record(&self, domain: &str, blocked: bool) {
+        if !self.enabled.load(Ordering::Relaxed) {
+            return;
+        }
         let mut buf = self.buffer.lock().unwrap();
 
         // Check if the hour/day rolled over
@@ -186,20 +264,31 @@ impl PersistentStats {
         Ok(())
     }
 
-    /// Return hourly aggregates for a time range (ISO 8601 strings).
+    /// Return hourly aggregates for a time range (ISO 8601 strings).  When
+    /// the archive is attached, merges active + archive rows so the caller
+    /// sees a continuous history despite rotation.
     pub async fn get_hourly_stats(&self, from: &str, to: &str) -> anyhow::Result<Vec<HourlyStat>> {
         let from = from.to_string();
         let to = to.to_string();
+        let archive_attached = self.archive_attached.load(Ordering::Relaxed);
         let conn = self.conn.clone();
 
         let stats = conn
             .call(move |conn| {
-                let mut stmt = conn.prepare(
-                    "SELECT hour, total_queries, blocked_queries
-                     FROM hourly_stats
-                     WHERE hour >= ?1 AND hour <= ?2
-                     ORDER BY hour ASC",
-                )?;
+                // Rotation moves rows by age, so active and archive never
+                // share an hour key — a straight UNION ALL is safe and
+                // preserves full fidelity without dedup cost.
+                let sql = if archive_attached {
+                    "SELECT hour, total_queries, blocked_queries FROM (
+                       SELECT hour, total_queries, blocked_queries FROM hourly_stats
+                       UNION ALL
+                       SELECT hour, total_queries, blocked_queries FROM archive.hourly_stats
+                     ) WHERE hour >= ?1 AND hour <= ?2 ORDER BY hour ASC"
+                } else {
+                    "SELECT hour, total_queries, blocked_queries FROM hourly_stats
+                     WHERE hour >= ?1 AND hour <= ?2 ORDER BY hour ASC"
+                };
+                let mut stmt = conn.prepare(sql)?;
                 let rows = stmt.query_map(params![from, to], |row| {
                     Ok(HourlyStat {
                         hour: row.get(0)?,
@@ -219,22 +308,34 @@ impl PersistentStats {
     }
 
     /// Return top queried and top blocked domains over the last N days.
+    /// Reads from both active and archive DBs when the archive is attached.
     pub async fn get_top_domains(&self, days: u32, limit: u32) -> anyhow::Result<TopDomains> {
         let cutoff = (Utc::now() - chrono::Duration::days(days as i64))
             .format("%Y-%m-%d")
             .to_string();
+        let archive_attached = self.archive_attached.load(Ordering::Relaxed);
         let conn = self.conn.clone();
 
         let result = conn
             .call(move |conn| {
-                let mut top_queried_stmt = conn.prepare(
-                    "SELECT domain, SUM(query_count) as total
-                     FROM daily_top_domains
+                let domain_src = if archive_attached {
+                    "(SELECT day, domain, query_count, blocked_count FROM daily_top_domains
+                      UNION ALL
+                      SELECT day, domain, query_count, blocked_count FROM archive.daily_top_domains)"
+                } else {
+                    "daily_top_domains"
+                };
+
+                let queried_sql = format!(
+                    "SELECT domain, SUM(query_count) AS total
+                     FROM {src}
                      WHERE day >= ?1
                      GROUP BY domain
                      ORDER BY total DESC
                      LIMIT ?2",
-                )?;
+                    src = domain_src
+                );
+                let mut top_queried_stmt = conn.prepare(&queried_sql)?;
                 let top_queried: Vec<DomainCount> = top_queried_stmt
                     .query_map(params![cutoff, limit as i64], |row| {
                         Ok(DomainCount {
@@ -245,14 +346,16 @@ impl PersistentStats {
                     .filter_map(|r| r.ok())
                     .collect();
 
-                let mut top_blocked_stmt = conn.prepare(
-                    "SELECT domain, SUM(blocked_count) as total
-                     FROM daily_top_domains
+                let blocked_sql = format!(
+                    "SELECT domain, SUM(blocked_count) AS total
+                     FROM {src}
                      WHERE day >= ?1 AND blocked_count > 0
                      GROUP BY domain
                      ORDER BY total DESC
                      LIMIT ?2",
-                )?;
+                    src = domain_src
+                );
+                let mut top_blocked_stmt = conn.prepare(&blocked_sql)?;
                 let top_blocked: Vec<DomainCount> = top_blocked_stmt
                     .query_map(params![cutoff, limit as i64], |row| {
                         Ok(DomainCount {
@@ -273,20 +376,29 @@ impl PersistentStats {
         Ok(result)
     }
 
-    /// Return summary statistics over the last N days.
+    /// Return summary statistics over the last N days.  Reads from both
+    /// active and archive DBs when the archive is attached.
     pub async fn get_summary(&self, days: u32) -> anyhow::Result<StatsSummary> {
         let cutoff = (Utc::now() - chrono::Duration::days(days as i64))
             .format("%Y-%m-%dT%H:00:00")
             .to_string();
+        let archive_attached = self.archive_attached.load(Ordering::Relaxed);
         let conn = self.conn.clone();
 
         let summary = conn
             .call(move |conn| {
-                let mut stmt = conn.prepare(
+                let sql = if archive_attached {
                     "SELECT COALESCE(SUM(total_queries), 0), COALESCE(SUM(blocked_queries), 0)
-                     FROM hourly_stats
-                     WHERE hour >= ?1",
-                )?;
+                     FROM (
+                       SELECT hour, total_queries, blocked_queries FROM hourly_stats
+                       UNION ALL
+                       SELECT hour, total_queries, blocked_queries FROM archive.hourly_stats
+                     ) WHERE hour >= ?1"
+                } else {
+                    "SELECT COALESCE(SUM(total_queries), 0), COALESCE(SUM(blocked_queries), 0)
+                     FROM hourly_stats WHERE hour >= ?1"
+                };
+                let mut stmt = conn.prepare(sql)?;
                 let (total, blocked): (i64, i64) =
                     stmt.query_row(params![cutoff], |row| Ok((row.get(0)?, row.get(1)?)))?;
 
@@ -309,27 +421,38 @@ impl PersistentStats {
         Ok(summary)
     }
 
-    /// Delete data older than the given number of days.
-    pub async fn purge_older_than(&self, days: u32) -> anyhow::Result<u64> {
-        let hour_cutoff = (Utc::now() - chrono::Duration::days(days as i64))
-            .format("%Y-%m-%dT%H:00:00")
-            .to_string();
-        let day_cutoff = (Utc::now() - chrono::Duration::days(days as i64))
-            .format("%Y-%m-%d")
-            .to_string();
+    /// Delete data older than the given number of minutes (both active and
+    /// archive DBs, when attached).  The schema stores hour-precision keys,
+    /// so sub-hour purge granularity rounds to the nearest hour boundary.
+    pub async fn purge_older_than_minutes(&self, minutes: u32) -> anyhow::Result<u64> {
+        let horizon = Utc::now() - chrono::Duration::minutes(minutes as i64);
+        let hour_cutoff = horizon.format("%Y-%m-%dT%H:00:00").to_string();
+        let day_cutoff = horizon.format("%Y-%m-%d").to_string();
+        let archive_attached = self.archive_attached.load(Ordering::Relaxed);
 
         let conn = self.conn.clone();
         let deleted = conn
             .call(move |conn| {
-                let h = conn.execute(
+                let mut count = 0u64;
+                count += conn.execute(
                     "DELETE FROM hourly_stats WHERE hour < ?1",
                     params![hour_cutoff],
-                )?;
-                let d = conn.execute(
+                )? as u64;
+                count += conn.execute(
                     "DELETE FROM daily_top_domains WHERE day < ?1",
                     params![day_cutoff],
-                )?;
-                Ok((h + d) as u64)
+                )? as u64;
+                if archive_attached {
+                    count += conn.execute(
+                        "DELETE FROM archive.hourly_stats WHERE hour < ?1",
+                        params![hour_cutoff],
+                    )? as u64;
+                    count += conn.execute(
+                        "DELETE FROM archive.daily_top_domains WHERE day < ?1",
+                        params![day_cutoff],
+                    )? as u64;
+                }
+                Ok(count)
             })
             .await?;
 
@@ -337,6 +460,243 @@ impl PersistentStats {
             info!("Purged {} old persistent stats rows", deleted);
         }
         Ok(deleted)
+    }
+
+    /// Rotate the oldest ~half of rows from the active stats DB into the
+    /// archive DB.  After rotation the active DB shrinks; the UI still
+    /// sees the data via the archive UNION in the read-path queries.
+    pub async fn rotate_to_archive(&self) -> anyhow::Result<u64> {
+        let archive_path = self.archive_path.clone();
+        let attached_flag = self.archive_attached.clone();
+
+        let conn = self.conn.clone();
+        let moved = conn
+            .call(move |conn| {
+                let was_attached = attached_flag.load(Ordering::Relaxed);
+                if !was_attached {
+                    conn.execute_batch(&format!(
+                        "ATTACH DATABASE '{}' AS archive;",
+                        archive_path.display()
+                    ))?;
+                }
+                // Create archive schema if missing.  INSERT OR IGNORE below
+                // tolerates any rows that somehow already exist there.
+                conn.execute_batch(
+                    "CREATE TABLE IF NOT EXISTS archive.hourly_stats (
+                         hour TEXT PRIMARY KEY,
+                         total_queries INTEGER DEFAULT 0,
+                         blocked_queries INTEGER DEFAULT 0
+                     );
+                     CREATE TABLE IF NOT EXISTS archive.daily_top_domains (
+                         day TEXT NOT NULL,
+                         domain TEXT NOT NULL,
+                         query_count INTEGER DEFAULT 0,
+                         blocked_count INTEGER DEFAULT 0,
+                         PRIMARY KEY (day, domain)
+                     );
+                     CREATE INDEX IF NOT EXISTS archive.idx_archive_hour
+                         ON hourly_stats(hour);
+                     CREATE INDEX IF NOT EXISTS archive.idx_archive_day
+                         ON daily_top_domains(day);",
+                )?;
+
+                // Pick the median hour in active — move everything older.
+                let total_hours: i64 =
+                    conn.query_row("SELECT COUNT(*) FROM hourly_stats", [], |r| r.get(0))?;
+                if total_hours <= 1 {
+                    return Ok(0u64);
+                }
+                let half = total_hours / 2;
+                let cutoff_hour: Option<String> = conn
+                    .query_row(
+                        "SELECT hour FROM hourly_stats ORDER BY hour ASC LIMIT 1 OFFSET ?1",
+                        params![half],
+                        |r| r.get(0),
+                    )
+                    .ok();
+                let Some(cutoff_hour) = cutoff_hour else {
+                    return Ok(0u64);
+                };
+                // Derive matching day cutoff from the hour cutoff's prefix.
+                let cutoff_day = cutoff_hour
+                    .split('T')
+                    .next()
+                    .unwrap_or(&cutoff_hour)
+                    .to_string();
+
+                let tx = conn.unchecked_transaction()?;
+                tx.execute(
+                    "INSERT OR IGNORE INTO archive.hourly_stats
+                         (hour, total_queries, blocked_queries)
+                     SELECT hour, total_queries, blocked_queries
+                     FROM hourly_stats WHERE hour < ?1",
+                    params![cutoff_hour],
+                )?;
+                tx.execute(
+                    "INSERT OR IGNORE INTO archive.daily_top_domains
+                         (day, domain, query_count, blocked_count)
+                     SELECT day, domain, query_count, blocked_count
+                     FROM daily_top_domains WHERE day < ?1",
+                    params![cutoff_day],
+                )?;
+                let moved_h = tx.execute(
+                    "DELETE FROM hourly_stats WHERE hour < ?1",
+                    params![cutoff_hour],
+                )? as u64;
+                let moved_d = tx.execute(
+                    "DELETE FROM daily_top_domains WHERE day < ?1",
+                    params![cutoff_day],
+                )? as u64;
+                tx.commit()?;
+
+                conn.execute_batch("DETACH DATABASE archive;")?;
+                conn.execute_batch("VACUUM;")?;
+                let _ = conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);");
+                conn.execute_batch(&format!(
+                    "ATTACH DATABASE '{}' AS archive;",
+                    archive_path.display()
+                ))?;
+                attached_flag.store(true, Ordering::Relaxed);
+
+                Ok(moved_h + moved_d)
+            })
+            .await?;
+
+        if moved > 0 {
+            info!(
+                "Rotated {} stats rows into archive {}",
+                moved,
+                self.archive_path.display()
+            );
+        }
+        Ok(moved)
+    }
+
+    /// Drop the stats archive file entirely.  Used by emergency purge.
+    pub async fn drop_archive(&self) -> anyhow::Result<u64> {
+        let archive_path = self.archive_path.clone();
+        let attached_flag = self.archive_attached.clone();
+        let size_before = std::fs::metadata(&archive_path)
+            .map(|m| m.len())
+            .unwrap_or(0);
+
+        let conn = self.conn.clone();
+        conn.call(move |conn| {
+            if attached_flag.load(Ordering::Relaxed) {
+                let _ = conn.execute_batch("DETACH DATABASE archive;");
+                attached_flag.store(false, Ordering::Relaxed);
+            }
+            Ok(())
+        })
+        .await?;
+
+        let _ = std::fs::remove_file(&archive_path);
+        let mut sidecar = archive_path.clone().into_os_string();
+        sidecar.push("-wal");
+        let _ = std::fs::remove_file(std::path::PathBuf::from(&sidecar));
+        let mut sidecar = archive_path.clone().into_os_string();
+        sidecar.push("-shm");
+        let _ = std::fs::remove_file(std::path::PathBuf::from(&sidecar));
+
+        if size_before > 0 {
+            warn!(
+                "Emergency purge: dropped stats archive ({} MB freed)",
+                size_before / (1024 * 1024)
+            );
+        }
+        Ok(size_before)
+    }
+
+    /// Trim the oldest `fraction` of rows from the active stats DB.
+    pub async fn trim_active(&self, fraction: f32) -> anyhow::Result<u64> {
+        let frac = fraction.clamp(0.0, 1.0);
+        if frac == 0.0 {
+            return Ok(0);
+        }
+        let conn = self.conn.clone();
+        let deleted = conn
+            .call(move |conn| {
+                let total: i64 =
+                    conn.query_row("SELECT COUNT(*) FROM hourly_stats", [], |r| r.get(0))?;
+                if total <= 1 {
+                    return Ok(0u64);
+                }
+                let to_drop = ((total as f32) * frac) as i64;
+                if to_drop <= 0 {
+                    return Ok(0u64);
+                }
+                let cutoff_hour: Option<String> = conn
+                    .query_row(
+                        "SELECT hour FROM hourly_stats ORDER BY hour ASC LIMIT 1 OFFSET ?1",
+                        params![to_drop],
+                        |r| r.get(0),
+                    )
+                    .ok();
+                let Some(cutoff_hour) = cutoff_hour else {
+                    return Ok(0u64);
+                };
+                let cutoff_day = cutoff_hour
+                    .split('T')
+                    .next()
+                    .unwrap_or(&cutoff_hour)
+                    .to_string();
+                let h = conn.execute(
+                    "DELETE FROM hourly_stats WHERE hour < ?1",
+                    params![cutoff_hour],
+                )? as u64;
+                let d = conn.execute(
+                    "DELETE FROM daily_top_domains WHERE day < ?1",
+                    params![cutoff_day],
+                )? as u64;
+                conn.execute_batch("VACUUM;")?;
+                let _ = conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);");
+                Ok(h + d)
+            })
+            .await?;
+        if deleted > 0 {
+            warn!(
+                "Emergency purge: trimmed {} oldest stats rows from active DB",
+                deleted
+            );
+        }
+        Ok(deleted)
+    }
+
+    /// Delete every row from the active stats DB, drop the archive, and
+    /// clear the in-memory buffer.  Used by the "Delete all stats" button.
+    pub async fn clear_all(&self) -> anyhow::Result<()> {
+        // Also wipe the in-memory buffer so any pending counts don't
+        // immediately rematerialize on the next flush.
+        {
+            let mut buf = self.buffer.lock().unwrap();
+            *buf = StatsBuffer::new();
+        }
+
+        let conn = self.conn.clone();
+        let attached_flag = self.archive_attached.clone();
+        conn.call(move |conn| {
+            if attached_flag.load(Ordering::Relaxed) {
+                let _ = conn.execute_batch("DETACH DATABASE archive;");
+                attached_flag.store(false, Ordering::Relaxed);
+            }
+            conn.execute("DELETE FROM hourly_stats", [])?;
+            conn.execute("DELETE FROM daily_top_domains", [])?;
+            conn.execute_batch("VACUUM;")?;
+            let _ = conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);");
+            Ok(())
+        })
+        .await?;
+
+        let _ = std::fs::remove_file(&self.archive_path);
+        let mut sidecar = self.archive_path.clone().into_os_string();
+        sidecar.push("-wal");
+        let _ = std::fs::remove_file(std::path::PathBuf::from(&sidecar));
+        let mut sidecar = self.archive_path.clone().into_os_string();
+        sidecar.push("-shm");
+        let _ = std::fs::remove_file(std::path::PathBuf::from(&sidecar));
+
+        warn!("All persistent stats cleared by operator request");
+        Ok(())
     }
 }
 
@@ -469,8 +829,8 @@ mod tests {
         stats.record("new.com", false);
         stats.flush().await.unwrap();
 
-        // Purge anything older than 30 days
-        let deleted = stats.purge_older_than(30).await.unwrap();
+        // Purge anything older than 30 days (30 * 1440 minutes)
+        let deleted = stats.purge_older_than_minutes(30 * 1440).await.unwrap();
         assert!(deleted >= 2, "should have purged old rows");
 
         // Current data should still be there

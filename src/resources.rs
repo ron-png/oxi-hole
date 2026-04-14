@@ -37,7 +37,11 @@ pub struct ResourceLimits {
     pub query_log_rotate_bytes: u64,
     /// When free disk on the query log's filesystem falls below this, run an
     /// emergency purge — first drop the archive, then trim the active DB.
+    /// Shared floor: applied to both the query log and the stats DB since
+    /// they live on the same filesystem.
     pub query_log_free_disk_floor_bytes: u64,
+    /// When the stats DB grows past this, rotate older rows into an archive.
+    pub stats_rotate_bytes: u64,
 }
 
 static LIMITS: OnceLock<ResourceLimits> = OnceLock::new();
@@ -69,7 +73,7 @@ pub fn init(cfg: &LimitsConfig) -> &'static ResourceLimits {
         }
     );
     info!(
-        "Resource limits: dns_cache={} ns_cache={} udp_inflight={} tcp={} dot={} doh={} doq_streams={} blocklist={}MB upload={}MB qlog_rotate={}MB qlog_disk_floor={}MB",
+        "Resource limits: dns_cache={} ns_cache={} udp_inflight={} tcp={} dot={} doh={} doq_streams={} blocklist={}MB upload={}MB qlog_rotate={}MB qlog_disk_floor={}MB stats_rotate={}MB",
         limits.dns_cache_entries,
         limits.ns_cache_entries,
         limits.udp_max_inflight,
@@ -81,6 +85,7 @@ pub fn init(cfg: &LimitsConfig) -> &'static ResourceLimits {
         limits.web_upload_max_bytes / MB as usize,
         limits.query_log_rotate_bytes / MB,
         limits.query_log_free_disk_floor_bytes / MB,
+        limits.stats_rotate_bytes / MB,
     );
     let _ = LIMITS.set(limits);
     LIMITS.get().unwrap()
@@ -151,6 +156,9 @@ pub fn compute(hw: &HardwareProfile, cfg: &LimitsConfig) -> ResourceLimits {
         // Operators almost always override the free-disk floor for their box.
         query_log_rotate_bytes: 2048 * MB,
         query_log_free_disk_floor_bytes: 500 * MB,
+        // Stats DB stays far smaller than the query log (aggregates, not
+        // individual rows), so a lower rotate threshold makes sense.
+        stats_rotate_bytes: 512 * MB,
     };
 
     ResourceLimits {
@@ -179,6 +187,10 @@ pub fn compute(hw: &HardwareProfile, cfg: &LimitsConfig) -> ResourceLimits {
             .query_log_free_disk_floor_mb
             .map(|mb| mb * MB)
             .unwrap_or(auto.query_log_free_disk_floor_bytes),
+        stats_rotate_bytes: cfg
+            .stats_rotate_mb
+            .map(|mb| mb * MB)
+            .unwrap_or(auto.stats_rotate_bytes),
     }
 }
 
