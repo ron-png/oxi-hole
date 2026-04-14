@@ -275,6 +275,53 @@ pub async fn process_dns_query(
     Ok(response_bytes)
 }
 
+/// Hard wall-clock cap on total query processing.  The upstream forwarder
+/// already has its own timeout, but this outer cap guarantees the caller's
+/// connection slot / UDP semaphore permit is released even if some inner
+/// future (blocklist lookup, query log write, iterative walker) stalls for
+/// any reason.
+pub const QUERY_PROCESSING_TIMEOUT_SECS: u64 = 10;
+
+/// `process_dns_query` wrapped in a hard total-processing timeout.  A timeout
+/// surfaces as `DnsError::ServerError`, which listeners translate to SERVFAIL.
+#[allow(clippy::too_many_arguments)]
+pub async fn process_dns_query_bounded(
+    packet: &[u8],
+    client_ip: &str,
+    blocklist: &BlocklistManager,
+    upstream: &UpstreamForwarder,
+    stats: &Stats,
+    features: &FeatureManager,
+    blocking_mode: &Arc<RwLock<BlockingMode>>,
+    query_log: &QueryLog,
+    anonymize_ip_flag: &Arc<AtomicBool>,
+    ipv6_enabled: &Arc<AtomicBool>,
+) -> Result<Vec<u8>, DnsError> {
+    match tokio::time::timeout(
+        std::time::Duration::from_secs(QUERY_PROCESSING_TIMEOUT_SECS),
+        process_dns_query(
+            packet,
+            client_ip,
+            blocklist,
+            upstream,
+            stats,
+            features,
+            blocking_mode,
+            query_log,
+            anonymize_ip_flag,
+            ipv6_enabled,
+        ),
+    )
+    .await
+    {
+        Ok(result) => result,
+        Err(_) => Err(DnsError::ServerError(anyhow::anyhow!(
+            "query processing exceeded {}s hard cap",
+            QUERY_PROCESSING_TIMEOUT_SECS
+        ))),
+    }
+}
+
 /// Build an RFC-compliant error response from raw packet bytes.
 /// Sets RA, echoes question section and EDNS OPT when the query is parseable.
 pub fn build_error_response(packet: &[u8], rcode: ResponseCode) -> Vec<u8> {

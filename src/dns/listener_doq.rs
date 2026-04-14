@@ -14,6 +14,12 @@ use tracing::{debug, error, info};
 const DOQ_NO_ERROR: quinn::VarInt = quinn::VarInt::from_u32(0x0);
 const DOQ_INTERNAL_ERROR: quinn::VarInt = quinn::VarInt::from_u32(0x1);
 const DOQ_PROTOCOL_ERROR: quinn::VarInt = quinn::VarInt::from_u32(0x2);
+
+/// How long a single DoQ stream may take to finish delivering its query.
+/// The connection-level idle timeout (30s in TransportConfig) covers the
+/// whole connection, but a slow-dribble client could hold an open stream
+/// indefinitely while still pinging keepalive traffic on the connection.
+const DOQ_STREAM_READ_TIMEOUT_SECS: u64 = 5;
 fn bind_udp_reuse_port(addr: &str) -> anyhow::Result<std::net::UdpSocket> {
     use socket2::{Domain, Protocol, Socket, Type};
     let sock_addr: std::net::SocketAddr = addr.parse()?;
@@ -128,13 +134,29 @@ async fn handle_doq_stream(
     anonymize_ip: &Arc<AtomicBool>,
     ipv6_enabled: &Arc<AtomicBool>,
 ) -> anyhow::Result<()> {
-    // DoQ: no length prefix per RFC 9250 §4.2 — read until stream FIN
-    let msg_buf = match recv.read_to_end(65535).await {
-        Ok(buf) => buf,
-        Err(_) => {
+    // DoQ: no length prefix per RFC 9250 §4.2 — read until stream FIN,
+    // but cap the read time so a slow-dribble client can't hold a stream
+    // (and therefore a spawned task slot) indefinitely.
+    let msg_buf = match tokio::time::timeout(
+        std::time::Duration::from_secs(DOQ_STREAM_READ_TIMEOUT_SECS),
+        recv.read_to_end(65535),
+    )
+    .await
+    {
+        Ok(Ok(buf)) => buf,
+        Ok(Err(_)) => {
             // RFC 9250 §4.3.3: protocol violations close the connection, not just the stream
             connection.close(DOQ_PROTOCOL_ERROR, b"failed to read stream");
             anyhow::bail!("Failed to read DoQ stream");
+        }
+        Err(_) => {
+            // Slow client — reset just the stream, not the whole connection.
+            let _ = send.reset(DOQ_PROTOCOL_ERROR);
+            anyhow::bail!(
+                "DoQ stream read from {} timed out after {}s",
+                client_ip,
+                DOQ_STREAM_READ_TIMEOUT_SECS
+            );
         }
     };
 
@@ -176,7 +198,7 @@ async fn handle_doq_stream(
         msg_buf[1] = 0;
     }
 
-    let response = match handler::process_dns_query(
+    let response = match handler::process_dns_query_bounded(
         &msg_buf,
         client_ip,
         blocklist,

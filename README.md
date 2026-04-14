@@ -1166,6 +1166,7 @@ Please note that this list is not a promise, rather thoughts I might change my m
 - add a warning for cloudflare users, that the proxy should be disabled for oxi-dns to work properly. 
 - the oxi-dns command should be able to signal to the web UI that the config has changed and the UI should reload the config. (feature)
 - test the container images
+- purge all dead code
 
 
 ### Goals for Version 2:
@@ -1183,6 +1184,7 @@ Please note that this list is not a promise, rather thoughts I might change my m
 - DHCP Server
 - redundancy feature. Dns server cluster
 - multiple subdomains using multiple filter configurations (feature)
+- purge all dead code
 
 ### Goals for Version 3:
 - More statistics, fancy graphs and more
@@ -1199,6 +1201,7 @@ Please note that this list is not a promise, rather thoughts I might change my m
   - this should be done in a way that the server can still run without the API.
   - the API should be able to be started and stopped independently of the DNS server.
 - encrypted config download 
+- purge all dead code
 
 ### Stuff that might be done
 - Look into RFC Compliance

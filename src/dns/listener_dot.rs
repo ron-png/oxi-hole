@@ -17,6 +17,16 @@ use tracing::{debug, error, info, warn};
 /// Idle timeout for DoT connections in seconds (RFC 7858 §3.4).
 const DOT_IDLE_TIMEOUT_SECS: u64 = 30;
 
+/// How long to wait for the TLS handshake to complete before reclaiming the
+/// connection slot.  Without this a stalled ClientHello would hold a permit
+/// forever (slowloris-over-TLS).
+const DOT_HANDSHAKE_TIMEOUT_SECS: u64 = 10;
+
+/// Hard cap on total connection lifetime.  A well-behaved client sending one
+/// query every 29s would evade the idle timeout indefinitely; after this the
+/// connection is closed gracefully and the client reconnects.
+const DOT_MAX_CONNECTION_LIFETIME_SECS: u64 = 300;
+
 /// Maximum DNS message size over DoT. Cap at 4096 to limit memory allocation
 /// from untrusted clients (legitimate DNS queries are far smaller).
 const MAX_DOT_MESSAGE_LEN: usize = 4096;
@@ -96,26 +106,38 @@ pub async fn run(
 
         tokio::spawn(async move {
             let result = async {
-                match acceptor.accept(tcp_stream).await {
-                    Ok(tls_stream) => {
-                        if let Err(e) = handle_dot_connection(
-                            tls_stream,
-                            &peer.ip().to_string(),
-                            &bl,
-                            &st,
-                            &up,
-                            &ft,
-                            &bm,
-                            &ql,
-                            &anon,
-                            &ipv6,
+                let handshake = tokio::time::timeout(
+                    Duration::from_secs(DOT_HANDSHAKE_TIMEOUT_SECS),
+                    acceptor.accept(tcp_stream),
+                )
+                .await;
+                match handshake {
+                    Ok(Ok(tls_stream)) => {
+                        // Cap total connection lifetime so a constant-keepalive
+                        // client can't squat on a permit forever.
+                        let peer_ip = peer.ip().to_string();
+                        let handler = handle_dot_connection(
+                            tls_stream, &peer_ip, &bl, &st, &up, &ft, &bm, &ql, &anon, &ipv6,
+                        );
+                        match tokio::time::timeout(
+                            Duration::from_secs(DOT_MAX_CONNECTION_LIFETIME_SECS),
+                            handler,
                         )
                         .await
                         {
-                            debug!("DoT connection error from {}: {}", peer, e);
+                            Ok(Err(e)) => debug!("DoT connection error from {}: {}", peer, e),
+                            Err(_) => debug!(
+                                "DoT connection from {} hit max-lifetime cap ({}s), closing",
+                                peer, DOT_MAX_CONNECTION_LIFETIME_SECS
+                            ),
+                            Ok(Ok(())) => {}
                         }
                     }
-                    Err(e) => debug!("TLS handshake failed from {}: {}", peer, e),
+                    Ok(Err(e)) => debug!("TLS handshake failed from {}: {}", peer, e),
+                    Err(_) => debug!(
+                        "DoT TLS handshake from {} timed out after {}s",
+                        peer, DOT_HANDSHAKE_TIMEOUT_SECS
+                    ),
                 }
             }
             .await;
@@ -169,7 +191,7 @@ async fn handle_dot_connection(
             }
         }
 
-        let response = match handler::process_dns_query(
+        let response = match handler::process_dns_query_bounded(
             &msg_buf,
             client_ip,
             blocklist,

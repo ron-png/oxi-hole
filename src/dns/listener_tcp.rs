@@ -16,6 +16,10 @@ use tracing::{debug, error, info, warn};
 /// Idle timeout for plain TCP DNS connections in seconds (RFC 7766 §6.2.3).
 const TCP_IDLE_TIMEOUT_SECS: u64 = 30;
 
+/// Hard cap on total TCP DNS connection lifetime.  Prevents a constant-
+/// keepalive client from squatting on a connection slot forever.
+const TCP_MAX_CONNECTION_LIFETIME_SECS: u64 = 300;
+
 /// Maximum DNS message size over TCP. DNS messages can be at most 65535 bytes
 /// (limited by the 2-byte length prefix), but legitimate queries are far smaller.
 /// Cap at 4096 to limit memory allocation from untrusted clients.
@@ -91,21 +95,22 @@ pub async fn run(
 
         tokio::spawn(async move {
             let _permit = permit; // hold permit for task lifetime
-            if let Err(e) = handle_tcp_connection(
-                tcp_stream,
-                &peer.ip().to_string(),
-                &bl,
-                &st,
-                &up,
-                &ft,
-                &bm,
-                &ql,
-                &anon,
-                &ipv6,
+            let peer_ip = peer.ip().to_string();
+            let handler = handle_tcp_connection(
+                tcp_stream, &peer_ip, &bl, &st, &up, &ft, &bm, &ql, &anon, &ipv6,
+            );
+            match tokio::time::timeout(
+                Duration::from_secs(TCP_MAX_CONNECTION_LIFETIME_SECS),
+                handler,
             )
             .await
             {
-                debug!("TCP DNS connection error from {}: {}", peer, e);
+                Ok(Err(e)) => debug!("TCP DNS connection error from {}: {}", peer, e),
+                Err(_) => debug!(
+                    "TCP DNS connection from {} hit max-lifetime cap ({}s), closing",
+                    peer, TCP_MAX_CONNECTION_LIFETIME_SECS
+                ),
+                Ok(Ok(())) => {}
             }
         });
     }
@@ -156,7 +161,7 @@ async fn handle_tcp_connection(
             }
         }
 
-        let response = match handler::process_dns_query(
+        let response = match handler::process_dns_query_bounded(
             &msg_buf,
             client_ip,
             blocklist,

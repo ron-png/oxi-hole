@@ -15,11 +15,31 @@ use hickory_proto::op::ResponseCode;
 use serde::Deserialize;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::net::TcpListener;
 use tokio::sync::RwLock;
 use tokio_rustls::TlsAcceptor;
 use tower_service::Service;
 use tracing::{debug, error, info, warn};
+
+/// How long to wait for the TLS handshake to complete before reclaiming the
+/// connection slot.  Without this a stalled ClientHello would hold the slot
+/// forever (slowloris-over-TLS).
+const DOH_HANDSHAKE_TIMEOUT_SECS: u64 = 10;
+
+/// Hard cap on total HTTPS connection lifetime.  HTTP/2 clients love to keep
+/// a single TCP connection open indefinitely; capping it ensures a slot can't
+/// be squatted on forever.
+const DOH_MAX_CONNECTION_LIFETIME_SECS: u64 = 300;
+
+/// HTTP/1 header-read timeout for slowloris protection.
+const DOH_HEADER_READ_TIMEOUT_SECS: u64 = 10;
+
+/// HTTP/2 keep-alive ping interval and timeout.  An idle h2 connection is
+/// pinged every N seconds; if no ack comes back within the timeout, the
+/// connection is torn down and its slot released.
+const DOH_H2_KEEPALIVE_INTERVAL_SECS: u64 = 30;
+const DOH_H2_KEEPALIVE_TIMEOUT_SECS: u64 = 20;
 
 fn bind_tcp_reuse_port(addr: &str) -> anyhow::Result<std::net::TcpListener> {
     use socket2::{Domain, Protocol, Socket, Type};
@@ -113,40 +133,79 @@ pub async fn run(
         let app = app.clone();
 
         tokio::spawn(async move {
-            let tls_stream = match acceptor.accept(tcp_stream).await {
-                Ok(s) => s,
-                Err(e) => {
-                    debug!("DoH TLS handshake failed from {}: {}", peer, e);
-                    return;
-                }
-            };
-
-            let io = hyper_util::rt::TokioIo::new(tls_stream);
-            let service = hyper::service::service_fn(
-                move |mut req: hyper::Request<hyper::body::Incoming>| {
-                    let app = app.clone();
-                    async move {
-                        // Inject peer address so handlers can extract real client IP
-                        req.extensions_mut().insert(peer);
-                        let (parts, body) = req.into_parts();
-                        let body = match http_body_util::BodyExt::collect(body).await {
-                            Ok(collected) => axum::body::Body::from(collected.to_bytes()),
-                            Err(_) => axum::body::Body::empty(),
-                        };
-                        let req = hyper::Request::from_parts(parts, body);
-                        let resp = app.into_service().call(req).await;
-                        resp
+            // Keep permit accounting correct across every exit path — handshake
+            // timeout, handshake error, successful connection, lifetime cap.
+            // Running the body in an inner async block lets us decrement after.
+            async {
+                let handshake = tokio::time::timeout(
+                    Duration::from_secs(DOH_HANDSHAKE_TIMEOUT_SECS),
+                    acceptor.accept(tcp_stream),
+                )
+                .await;
+                let tls_stream = match handshake {
+                    Ok(Ok(s)) => s,
+                    Ok(Err(e)) => {
+                        debug!("DoH TLS handshake failed from {}: {}", peer, e);
+                        return;
                     }
-                },
-            );
+                    Err(_) => {
+                        debug!(
+                            "DoH TLS handshake from {} timed out after {}s",
+                            peer, DOH_HANDSHAKE_TIMEOUT_SECS
+                        );
+                        return;
+                    }
+                };
 
-            if let Err(e) =
-                hyper_util::server::conn::auto::Builder::new(hyper_util::rt::TokioExecutor::new())
-                    .serve_connection(io, service)
-                    .await
-            {
-                debug!("DoH connection error from {}: {}", peer, e);
+                let io = hyper_util::rt::TokioIo::new(tls_stream);
+                let service = hyper::service::service_fn(
+                    move |mut req: hyper::Request<hyper::body::Incoming>| {
+                        let app = app.clone();
+                        async move {
+                            // Inject peer address so handlers can extract real client IP
+                            req.extensions_mut().insert(peer);
+                            let (parts, body) = req.into_parts();
+                            let body = match http_body_util::BodyExt::collect(body).await {
+                                Ok(collected) => axum::body::Body::from(collected.to_bytes()),
+                                Err(_) => axum::body::Body::empty(),
+                            };
+                            let req = hyper::Request::from_parts(parts, body);
+                            app.into_service().call(req).await
+                        }
+                    },
+                );
+
+                // Configure timeouts on the connection so idle / slow clients
+                // release their slot promptly.  `http1().header_read_timeout`
+                // catches slowloris header dribble; the h2 keepalive ping
+                // catches silently dead HTTP/2 connections.
+                let mut builder = hyper_util::server::conn::auto::Builder::new(
+                    hyper_util::rt::TokioExecutor::new(),
+                );
+                builder
+                    .http1()
+                    .header_read_timeout(Some(Duration::from_secs(DOH_HEADER_READ_TIMEOUT_SECS)));
+                builder
+                    .http2()
+                    .keep_alive_interval(Some(Duration::from_secs(DOH_H2_KEEPALIVE_INTERVAL_SECS)))
+                    .keep_alive_timeout(Duration::from_secs(DOH_H2_KEEPALIVE_TIMEOUT_SECS));
+
+                let serve = builder.serve_connection(io, service);
+                match tokio::time::timeout(
+                    Duration::from_secs(DOH_MAX_CONNECTION_LIFETIME_SECS),
+                    serve,
+                )
+                .await
+                {
+                    Ok(Err(e)) => debug!("DoH connection error from {}: {}", peer, e),
+                    Err(_) => debug!(
+                        "DoH connection from {} hit max-lifetime cap ({}s), closing",
+                        peer, DOH_MAX_CONNECTION_LIFETIME_SECS
+                    ),
+                    Ok(Ok(())) => {}
+                }
             }
+            .await;
             conn_count.fetch_sub(1, Ordering::AcqRel);
         });
     }
@@ -180,7 +239,7 @@ async fn doh_get(
         Err(_) => return (StatusCode::BAD_REQUEST, "Invalid base64url DNS query").into_response(),
     };
 
-    match handler::process_dns_query(
+    match handler::process_dns_query_bounded(
         &packet,
         &client_ip,
         &state.blocklist,
@@ -246,7 +305,7 @@ async fn doh_post(State(state): State<DohState>, req: axum::extract::Request) ->
         Err(_) => return (StatusCode::PAYLOAD_TOO_LARGE, "body too large").into_response(),
     };
 
-    match handler::process_dns_query(
+    match handler::process_dns_query_bounded(
         &body,
         &client_ip,
         &state.blocklist,

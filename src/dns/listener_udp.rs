@@ -171,7 +171,7 @@ pub async fn run(
         tokio::spawn(async move {
             let _permit = permit; // hold permit for task lifetime
             let client_ip = src.ip().to_string();
-            match handler::process_dns_query(
+            match handler::process_dns_query_bounded(
                 &packet, &client_ip, &bl, &up, &st, &ft, &bm, &ql, &anon, &ipv6,
             )
             .await
