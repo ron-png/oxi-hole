@@ -41,7 +41,7 @@ pub struct AppState {
     pub blocking_mode: std::sync::Arc<tokio::sync::RwLock<BlockingMode>>,
     pub config_path: PathBuf,
     pub query_log: QueryLog,
-    pub log_retention_days: std::sync::Arc<tokio::sync::RwLock<u32>>,
+    pub log_retention_minutes: std::sync::Arc<tokio::sync::RwLock<u32>>,
     pub anonymize_ip: std::sync::Arc<AtomicBool>,
     pub ipv6_enabled: std::sync::Arc<AtomicBool>,
     pub auth: AuthService,
@@ -85,7 +85,12 @@ impl AppState {
         config.system.auto_update = *self.auto_update.read().await;
         config.system.ipv6_enabled = self.ipv6_enabled.load(std::sync::atomic::Ordering::Relaxed);
         config.blocking.blocking_mode = self.blocking_mode.read().await.clone();
-        config.log.query_log_retention_days = *self.log_retention_days.read().await;
+        // Always write the canonical minutes form and clear the legacy _days
+        // field so the stored config is unambiguous.
+        let minutes = *self.log_retention_minutes.read().await;
+        config.log.query_log_retention_minutes = Some(minutes);
+        config.log.query_log_retention_days = None;
+        config.log.query_log_enabled = self.query_log.is_enabled();
         config.log.stats_retention_days = *self.stats_retention_days.read().await;
         config.log.anonymize_client_ip =
             self.anonymize_ip.load(std::sync::atomic::Ordering::Relaxed);
@@ -2296,6 +2301,8 @@ const LIMIT_BOUNDS_CONNECTIONS: (usize, usize) = (16, 65_535);
 const LIMIT_BOUNDS_DOQ_STREAMS: (u64, u64) = (4, 4_096);
 const LIMIT_BOUNDS_BLOCKLIST_MB: (usize, usize) = (1, 2_048);
 const LIMIT_BOUNDS_UPLOAD_MB: (usize, usize) = (1, 512);
+const LIMIT_BOUNDS_QLOG_ROTATE_MB: (u64, u64) = (64, 65_536);
+const LIMIT_BOUNDS_QLOG_FREE_DISK_MB: (u64, u64) = (50, 1_024_000);
 
 fn clamp_opt<T: PartialOrd + Copy>(
     name: &str,
@@ -2356,6 +2363,16 @@ fn validate_limits(cfg: &crate::config::LimitsConfig) -> Result<(), String> {
         cfg.web_upload_max_mb,
         LIMIT_BOUNDS_UPLOAD_MB,
     )?;
+    clamp_opt(
+        "query_log_rotate_mb",
+        cfg.query_log_rotate_mb,
+        LIMIT_BOUNDS_QLOG_ROTATE_MB,
+    )?;
+    clamp_opt(
+        "query_log_free_disk_floor_mb",
+        cfg.query_log_free_disk_floor_mb,
+        LIMIT_BOUNDS_QLOG_FREE_DISK_MB,
+    )?;
     Ok(())
 }
 
@@ -2370,6 +2387,8 @@ fn limits_to_json(l: &crate::resources::ResourceLimits) -> serde_json::Value {
         "doq_max_streams_per_connection": l.doq_max_streams_per_connection,
         "blocklist_max_mb": l.blocklist_max_bytes / (1024 * 1024),
         "web_upload_max_mb": l.web_upload_max_bytes / (1024 * 1024),
+        "query_log_rotate_mb": l.query_log_rotate_bytes / (1024 * 1024),
+        "query_log_free_disk_floor_mb": l.query_log_free_disk_floor_bytes / (1024 * 1024),
     })
 }
 
@@ -2410,6 +2429,8 @@ async fn api_get_limits(
             "doq_max_streams_per_connection": configured.doq_max_streams_per_connection,
             "blocklist_max_mb": configured.blocklist_max_mb,
             "web_upload_max_mb": configured.web_upload_max_mb,
+            "query_log_rotate_mb": configured.query_log_rotate_mb,
+            "query_log_free_disk_floor_mb": configured.query_log_free_disk_floor_mb,
         },
         "bounds": {
             "dns_cache_entries": LIMIT_BOUNDS_DNS_CACHE,
@@ -2421,6 +2442,8 @@ async fn api_get_limits(
             "doq_max_streams_per_connection": LIMIT_BOUNDS_DOQ_STREAMS,
             "blocklist_max_mb": LIMIT_BOUNDS_BLOCKLIST_MB,
             "web_upload_max_mb": LIMIT_BOUNDS_UPLOAD_MB,
+            "query_log_rotate_mb": LIMIT_BOUNDS_QLOG_ROTATE_MB,
+            "query_log_free_disk_floor_mb": LIMIT_BOUNDS_QLOG_FREE_DISK_MB,
         },
     }))
     .into_response()
@@ -2527,9 +2550,18 @@ async fn api_logs(
 
 #[derive(Serialize)]
 struct LogSettingsResponse {
-    query_log_retention_days: u32,
+    /// Whether query logging is currently on.
+    query_log_enabled: bool,
+    /// Retention in minutes (canonical).  UIs can divide by 60 or 1440 to
+    /// render hours or days as they prefer.
+    query_log_retention_minutes: u32,
     stats_retention_days: u32,
     anonymize_client_ip: bool,
+    /// Informational: sizes of the active + archive DB files in bytes,
+    /// plus whether the archive currently exists.
+    active_db_bytes: u64,
+    archive_db_bytes: u64,
+    archive_attached: bool,
 }
 
 async fn api_get_log_settings(
@@ -2538,16 +2570,26 @@ async fn api_get_log_settings(
 ) -> Result<Json<LogSettingsResponse>, Response> {
     require_permission(&user, Permission::ViewLogs)?;
     Ok(Json(LogSettingsResponse {
-        query_log_retention_days: *state.log_retention_days.read().await,
+        query_log_enabled: state.query_log.is_enabled(),
+        query_log_retention_minutes: *state.log_retention_minutes.read().await,
         stats_retention_days: *state.stats_retention_days.read().await,
         anonymize_client_ip: state
             .anonymize_ip
             .load(std::sync::atomic::Ordering::Relaxed),
+        active_db_bytes: state.query_log.active_db_size(),
+        archive_db_bytes: state.query_log.archive_db_size(),
+        archive_attached: state.query_log.archive_is_attached(),
     }))
 }
 
 #[derive(Deserialize)]
 struct LogSettingsRequest {
+    #[serde(default)]
+    query_log_enabled: Option<bool>,
+    #[serde(default)]
+    query_log_retention_minutes: Option<u32>,
+    /// Legacy: still accepted so older UI builds keep working.  Converted
+    /// to minutes on the server.
     #[serde(default)]
     query_log_retention_days: Option<u32>,
     #[serde(default)]
@@ -2562,10 +2604,19 @@ async fn api_set_log_settings(
     Json(req): Json<LogSettingsRequest>,
 ) -> Result<StatusCode, Response> {
     require_permission(&user, Permission::ManageSystem)?;
-    if let Some(days) = req.query_log_retention_days {
-        let clamped = days.clamp(1, 90);
-        *state.log_retention_days.write().await = clamped;
-        info!("Query log retention set to {} days", clamped);
+    if let Some(enabled) = req.query_log_enabled {
+        state.query_log.set_enabled(enabled);
+    }
+    // Minutes takes precedence; fall back to legacy _days if sent alone.
+    let minutes = req
+        .query_log_retention_minutes
+        .or_else(|| req.query_log_retention_days.map(|d| d.saturating_mul(1440)));
+    if let Some(m) = minutes {
+        // Lower bound 5 minutes (any less and the purge task, which runs
+        // every 60s, would thrash).  Upper bound 365 days.
+        let clamped = m.clamp(5, 365 * 1440);
+        *state.log_retention_minutes.write().await = clamped;
+        info!("Query log retention set to {} minutes", clamped);
     }
     if let Some(days) = req.stats_retention_days {
         let clamped = days.clamp(1, 365);

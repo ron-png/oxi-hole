@@ -61,6 +61,7 @@ Then open the dashboard at **http://<host>:9853** (or **https://<host>:9854** wi
   - [\[system\]](#system)
   - [\[log\]](#log)
   - [\[limits\]](#limits)
+- [System logs](#system-logs)
 - [Command-line options](#command-line-options)
 - [Reconfigure](#reconfigure)
 - [HTTPS & Reverse Proxy](#https--reverse-proxy)
@@ -467,9 +468,13 @@ Automatic certificate management via Let's Encrypt (or compatible CA).
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `query_log_retention_days` | integer | `7` | Days to keep query log entries before automatic cleanup. |
+| `query_log_enabled` | bool | `true` | Master on/off for query logging. When `false`, no new entries are recorded (existing rows remain). Toggled live from the web UI. |
+| `query_log_retention_minutes` | integer | `10080` (= 7 days) | Retention in minutes. Canonical field — the web UI always writes this one. Sub-day retention (e.g. `720` = 12 hours) is supported; the purge task runs every minute. |
+| `query_log_retention_days` | integer | *(legacy)* | Legacy day-based retention. Kept for back-compat with hand-edited configs. Auto-migrated to `_minutes` at startup; cleared when the web UI next saves. |
 | `stats_retention_days` | integer | `90` | Days to keep historical statistics. |
 | `anonymize_client_ip` | bool | `false` | Anonymize client IPs in the query log (e.g. `192.168.1.100` becomes `192.168.1.0`). |
+
+Query log rotation is controlled by the two `query_log_*` entries in `[limits]` below.  When the active DB grows past `query_log_rotate_mb`, the oldest half of its rows are moved into a sibling `query_log_archive.db` (still visible in the UI via transparent UNION).  Only when free disk on the log's filesystem falls below `query_log_free_disk_floor_mb` is any data actually deleted — first the archive, then a 25 % trim of the active DB if space is still critical.
 
 ### `[limits]`
 
@@ -495,6 +500,8 @@ auto-scaling.  All memory values are interpreted as mebibytes (1 MB = 1024×1024
 | `doq_max_streams_per_connection` | integer | `cpu × 16` | `64` | `512` | Max concurrent bidirectional streams per DoQ connection (enforced via QUIC transport parameters — RFC 9250 §7). |
 | `blocklist_max_mb` | integer | `ram_mb ÷ 8` | `50` | `500` | Max size (MB) of a single downloaded or on-disk blocklist. Sources that exceed this are refused. |
 | `web_upload_max_mb` | integer | `ram_mb ÷ 64` | `2` | `50` | Max size (MB) for web-admin uploads (TLS cert / key / PKCS#12 bundles). |
+| `query_log_rotate_mb` | integer | fixed `2048` | `64` | `65 536` | Size threshold at which the query log rotates older rows into `query_log_archive.db`. Data is preserved; UI still sees it. |
+| `query_log_free_disk_floor_mb` | integer | fixed `500` | `50` | `1 024 000` | Minimum free disk to keep on the query log's filesystem. Below this, emergency purge kicks in (drops archive, then trims active DB). |
 
 Example — a tiny VPS where you want a smaller cache and stricter upload cap:
 
@@ -570,11 +577,13 @@ ipv6_enabled = true
 release_channel = "stable"
 
 [log]
-query_log_retention_days = 7
+query_log_enabled = true
+query_log_retention_minutes = 10080   # 7 days
 stats_retention_days = 90
 anonymize_client_ip = false
 
-# [limits]  — every key is optional; unset keys auto-scale from detected hardware.
+# [limits]  — every key is optional; unset keys auto-scale from detected hardware
+#             (except the query_log_* keys below, which use fixed defaults).
 # dns_cache_entries = 100000
 # ns_cache_entries = 10000
 # udp_max_inflight = 1024
@@ -584,7 +593,39 @@ anonymize_client_ip = false
 # doq_max_streams_per_connection = 128
 # blocklist_max_mb = 100
 # web_upload_max_mb = 10
+# query_log_rotate_mb = 2048
+# query_log_free_disk_floor_mb = 500
 ```
+
+## System logs
+
+The settings under `[log]` above control the **DNS query log** (the
+per-request SQLite database viewed in the web dashboard). They do **not**
+control the `info!` / `warn!` / `error!` lines oxi-dns prints to stdout
+during startup, blocklist refresh, upstream failures, etc. — those are
+captured by whatever init system started the process, and their retention
+is that init system's responsibility.
+
+| Platform | Where the logs live | How to view | Retention knob |
+|---|---|---|---|
+| Linux + systemd | systemd journal | `journalctl -u oxi-dns -f` | `/etc/systemd/journald.conf` → `SystemMaxUse=`, `MaxRetentionSec=`, `MaxFileSec=` (then `systemctl restart systemd-journald`) |
+| Linux + OpenRC / runit / s6 | Per-service log dir (usually `/var/log/<svc>/current`) | `tail -F /var/log/oxi-dns/current` | `logrotate(8)` or the supervisor's log runner (e.g. runit's `svlogd -tt -s<size>`) |
+| macOS + launchd | Wherever your `.plist`'s `StandardOutPath` / `StandardErrorPath` points; otherwise unified logging | `log stream --predicate 'process == "oxi-dns"'` or the file you configured | Rotate via `newsyslog(8)` (see `/etc/newsyslog.conf`) or manage the plist's `StandardOutPath` with `logrotate` |
+| FreeBSD / OpenBSD (rc.d) | `/var/log/daemon.log` via syslogd | `tail -F /var/log/daemon.log` | `newsyslog(8)` — `/etc/newsyslog.conf` |
+| Docker / Podman | Container log driver (JSON by default) | `docker logs -f oxi-dns` | `--log-opt max-size=10m --log-opt max-file=3`, or set in `daemon.json` / `containers.conf` |
+| Kubernetes | Node CRI + cluster pipeline | `kubectl logs -f <pod>` | Depends on your cluster's log aggregation (fluentd / Loki / Vector / etc.) |
+
+**Tuning verbosity.** The `tracing` level is read from `RUST_LOG` at
+startup; default is `oxi_dns=info`. Drop it to `warn` on a busy server if
+your journal is filling up too fast:
+
+```ini
+# /etc/systemd/system/oxi-dns.service.d/override.conf
+[Service]
+Environment=RUST_LOG=oxi_dns=warn
+```
+
+Then `systemctl daemon-reload && systemctl restart oxi-dns`.
 
 ## Command-line options
 

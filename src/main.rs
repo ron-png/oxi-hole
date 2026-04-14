@@ -269,9 +269,11 @@ async fn main() -> anyhow::Result<()> {
     let anonymize_ip = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(
         config.log.anonymize_client_ip,
     ));
-    let log_retention_days = std::sync::Arc::new(tokio::sync::RwLock::new(
-        config.log.query_log_retention_days,
+    let log_retention_minutes = std::sync::Arc::new(tokio::sync::RwLock::new(
+        config.log.effective_retention_minutes(),
     ));
+    // Apply the enable/disable toggle to the live QueryLog handle.
+    query_log.set_enabled(config.log.query_log_enabled);
     let ipv6_enabled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(
         config.system.ipv6_enabled,
     ));
@@ -361,7 +363,7 @@ async fn main() -> anyhow::Result<()> {
         blocking_mode,
         config_path: config_path.clone(),
         query_log,
-        log_retention_days,
+        log_retention_minutes,
         anonymize_ip,
         ipv6_enabled,
         auth: auth_service,
@@ -402,19 +404,94 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
-    // Spawn background log retention cleanup task (runs hourly)
+    // Spawn background log retention cleanup task. Runs every minute so
+    // sub-hour retention settings (e.g. 12h or 30m) actually track.
     {
         let ql = web_state.query_log.clone();
-        let retention = web_state.log_retention_days.clone();
+        let retention = web_state.log_retention_minutes.clone();
         tokio::spawn(async move {
             loop {
-                tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
-                let days = *retention.read().await;
-                if let Err(e) = ql.purge_older_than(days).await {
+                tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+                let minutes = *retention.read().await;
+                if let Err(e) = ql.purge_older_than_minutes(minutes).await {
                     tracing::warn!("Log retention purge failed: {}", e);
                 }
             }
         });
+    }
+
+    // Query log size / disk pressure monitor.  Every 5 minutes:
+    //   1. If the active DB is over the rotate threshold, move oldest half
+    //      of rows into the archive (data preserved, UI still sees it).
+    //   2. If free disk on the log's filesystem is below the floor, drop the
+    //      archive entirely, then trim the active DB if still below.
+    {
+        let ql = web_state.query_log.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(300)).await;
+                let limits = crate::resources::limits();
+
+                // Step 1: rotation based on active DB size.
+                let active_size = ql.active_db_size();
+                if active_size > limits.query_log_rotate_bytes {
+                    tracing::info!(
+                        "Query log rotation: active DB at {} MB exceeds {} MB threshold",
+                        active_size / (1024 * 1024),
+                        limits.query_log_rotate_bytes / (1024 * 1024),
+                    );
+                    if let Err(e) = ql.rotate_to_archive().await {
+                        tracing::warn!("Query log rotation failed: {}", e);
+                    }
+                }
+
+                // Step 2: emergency purge based on free disk.
+                let log_dir = ql
+                    .active_db_path()
+                    .parent()
+                    .unwrap_or(std::path::Path::new("/"))
+                    .to_path_buf();
+                match free_disk_bytes(&log_dir) {
+                    Some(free) if free < limits.query_log_free_disk_floor_bytes => {
+                        tracing::warn!(
+                            "Free disk ({} MB) below floor ({} MB); emergency-purging query log",
+                            free / (1024 * 1024),
+                            limits.query_log_free_disk_floor_bytes / (1024 * 1024),
+                        );
+                        if let Err(e) = ql.drop_archive().await {
+                            tracing::warn!("Emergency purge (archive drop) failed: {}", e);
+                        }
+                        // Re-check — if the archive drop didn't free enough,
+                        // trim 25% of active rows as a last resort.
+                        if let Some(still_free) = free_disk_bytes(&log_dir) {
+                            if still_free < limits.query_log_free_disk_floor_bytes {
+                                if let Err(e) = ql.trim_active(0.25).await {
+                                    tracing::warn!("Emergency purge (active trim) failed: {}", e);
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        });
+    }
+
+    // ---- helper ----
+    fn free_disk_bytes(path: &std::path::Path) -> Option<u64> {
+        use std::ffi::CString;
+        use std::os::unix::ffi::OsStrExt;
+        let c = CString::new(path.as_os_str().as_bytes()).ok()?;
+        // SAFETY: statvfs writes into a stack-allocated, zeroed buffer; we
+        // only read its fields back out.
+        let mut stat: libc::statvfs = unsafe { std::mem::zeroed() };
+        let rc = unsafe { libc::statvfs(c.as_ptr(), &mut stat) };
+        if rc != 0 {
+            return None;
+        }
+        // f_bavail is blocks available to unprivileged users — the number
+        // the operator actually cares about.
+        Some(stat.f_bavail * stat.f_frsize)
     }
 
     // Spawn stats flush task (every 60 seconds)

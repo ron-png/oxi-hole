@@ -80,6 +80,14 @@ pub struct LimitsConfig {
     /// Max size for a single web-admin upload (cert/key/p12), in MB.
     #[serde(default)]
     pub web_upload_max_mb: Option<usize>,
+    /// When the query log DB grows past this, rotate oldest rows into an
+    /// archive DB (rows stay visible in the UI).
+    #[serde(default)]
+    pub query_log_rotate_mb: Option<u64>,
+    /// Minimum free disk to keep on the query log's filesystem.  Below this,
+    /// an emergency purge drops the archive then trims the active DB.
+    #[serde(default)]
+    pub query_log_free_disk_floor_mb: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -213,8 +221,18 @@ impl Default for SystemConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LogConfig {
-    #[serde(default = "default_query_log_retention", alias = "retention_days")]
-    pub query_log_retention_days: u32,
+    /// Whether query logging is enabled at all. When false, no entries are
+    /// written to the query log database (existing entries are retained).
+    #[serde(default = "default_true")]
+    pub query_log_enabled: bool,
+    /// Retention in days. Legacy field kept for back-compat with hand-edited
+    /// configs; the web UI writes to `query_log_retention_minutes` instead.
+    /// On startup, if `_minutes` is unset and this is set, we migrate it.
+    #[serde(default, alias = "retention_days")]
+    pub query_log_retention_days: Option<u32>,
+    /// Retention in minutes. Takes precedence over `_days` when set.
+    #[serde(default)]
+    pub query_log_retention_minutes: Option<u32>,
     #[serde(default = "default_stats_retention")]
     pub stats_retention_days: u32,
     /// Whether to anonymize client IPs in the query log
@@ -222,7 +240,20 @@ pub struct LogConfig {
     pub anonymize_client_ip: bool,
 }
 
-fn default_query_log_retention() -> u32 {
+impl LogConfig {
+    /// Effective retention in minutes, resolving minutes-vs-days precedence.
+    pub fn effective_retention_minutes(&self) -> u32 {
+        if let Some(m) = self.query_log_retention_minutes {
+            return m;
+        }
+        if let Some(d) = self.query_log_retention_days {
+            return d.saturating_mul(1440);
+        }
+        default_query_log_retention_days().saturating_mul(1440)
+    }
+}
+
+fn default_query_log_retention_days() -> u32 {
     7
 }
 
@@ -233,7 +264,11 @@ fn default_stats_retention() -> u32 {
 impl Default for LogConfig {
     fn default() -> Self {
         Self {
-            query_log_retention_days: default_query_log_retention(),
+            query_log_enabled: true,
+            query_log_retention_days: None,
+            query_log_retention_minutes: Some(
+                default_query_log_retention_days().saturating_mul(1440),
+            ),
             stats_retention_days: default_stats_retention(),
             anonymize_client_ip: false,
         }
@@ -423,6 +458,20 @@ impl Config {
             self.web.https_listen = Some(vec!["0.0.0.0:9854".to_string(), "[::]:9854".to_string()]);
             tracing::info!("Config migration: added web.https_listen = [0.0.0.0:9854, [::]:9854]");
             changed = true;
+        }
+
+        // v0.6.0+: query_log_retention_days → query_log_retention_minutes.
+        // Preserve the intent of hand-edited configs that still use _days.
+        if self.log.query_log_retention_minutes.is_none() {
+            if let Some(d) = self.log.query_log_retention_days.take() {
+                self.log.query_log_retention_minutes = Some(d.saturating_mul(1440));
+                tracing::info!(
+                    "Config migration: query_log_retention_days={} → query_log_retention_minutes={}",
+                    d,
+                    d.saturating_mul(1440)
+                );
+                changed = true;
+            }
         }
 
         changed

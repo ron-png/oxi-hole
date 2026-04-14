@@ -1,7 +1,8 @@
 use chrono::{DateTime, Utc};
 use rusqlite::params;
 use serde::Serialize;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tracing::{info, warn};
 
@@ -37,9 +38,31 @@ pub struct LogPage {
 }
 
 /// Persistent query log backed by SQLite.
+///
+/// Two DB files may coexist:
+///   `query_log.db` — active, receives inserts, subject to retention purge
+///   `query_log_archive.db` — rotated-out older rows, read-only for the UI
+///
+/// When the archive file exists at open() it is ATTACHed so searches
+/// transparently read from both.  Rotation moves the oldest half of active
+/// rows into the archive and VACUUMs the active DB.  Emergency purge drops
+/// the archive file entirely, then trims the active DB if still needed.
 #[derive(Clone)]
 pub struct QueryLog {
     conn: Arc<tokio_rusqlite::Connection>,
+    enabled: Arc<AtomicBool>,
+    active_path: PathBuf,
+    archive_path: PathBuf,
+    archive_attached: Arc<AtomicBool>,
+}
+
+fn archive_path_for(active: &Path) -> PathBuf {
+    let parent = active.parent().unwrap_or_else(|| Path::new("."));
+    let stem = active
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("query_log");
+    parent.join(format!("{}_archive.db", stem))
 }
 
 impl QueryLog {
@@ -73,14 +96,82 @@ impl QueryLog {
         })
         .await?;
 
+        let active_path = path.to_path_buf();
+        let archive_path = archive_path_for(path);
+        let archive_attached = Arc::new(AtomicBool::new(false));
+
+        // If a prior run left an archive behind, ATTACH it so searches see
+        // both databases transparently.
+        if archive_path.exists() {
+            let ap = archive_path.clone();
+            let attached = archive_attached.clone();
+            let attach_result = conn
+                .call(move |conn| {
+                    conn.execute_batch(&format!("ATTACH DATABASE '{}' AS archive;", ap.display()))?;
+                    Ok(())
+                })
+                .await;
+            match attach_result {
+                Ok(()) => {
+                    attached.store(true, Ordering::Relaxed);
+                    info!("Attached query log archive at {}", archive_path.display());
+                }
+                Err(e) => warn!("Failed to attach query log archive: {}", e),
+            }
+        }
+
         info!("Query log database opened at {}", path.display());
         Ok(Self {
             conn: Arc::new(conn),
+            enabled: Arc::new(AtomicBool::new(true)),
+            active_path,
+            archive_path,
+            archive_attached,
         })
     }
 
+    /// Toggle whether new rows are recorded.  Existing rows remain.
+    pub fn set_enabled(&self, enabled: bool) {
+        let prev = self.enabled.swap(enabled, Ordering::Relaxed);
+        if prev != enabled {
+            info!(
+                "Query logging {}",
+                if enabled { "enabled" } else { "disabled" }
+            );
+        }
+    }
+
+    pub fn is_enabled(&self) -> bool {
+        self.enabled.load(Ordering::Relaxed)
+    }
+
+    pub fn archive_is_attached(&self) -> bool {
+        self.archive_attached.load(Ordering::Relaxed)
+    }
+
+    pub fn active_db_path(&self) -> &Path {
+        &self.active_path
+    }
+
+    /// Return the byte size of the active DB file (best-effort).
+    pub fn active_db_size(&self) -> u64 {
+        std::fs::metadata(&self.active_path)
+            .map(|m| m.len())
+            .unwrap_or(0)
+    }
+
+    pub fn archive_db_size(&self) -> u64 {
+        std::fs::metadata(&self.archive_path)
+            .map(|m| m.len())
+            .unwrap_or(0)
+    }
+
     /// Insert a log entry. Fire-and-forget — errors are logged, never propagated.
+    /// No-ops when query logging is disabled.
     pub fn insert(&self, entry: LogEntry) {
+        if !self.enabled.load(Ordering::Relaxed) {
+            return;
+        }
         let conn = self.conn.clone();
         tokio::spawn(async move {
             let result = conn
@@ -113,6 +204,7 @@ impl QueryLog {
     /// Search the query log with filters and cursor-based pagination.
     pub async fn search(&self, params: LogQueryParams) -> anyhow::Result<LogPage> {
         let limit = params.limit.clamp(1, 200);
+        let archive_attached = self.archive_attached.load(Ordering::Relaxed);
 
         let conn = self.conn.clone();
         conn.call(move |conn| {
@@ -175,10 +267,19 @@ impl QueryLog {
                 }
             }
 
+            // When the archive DB is attached, union it transparently so the
+            // UI sees a continuous log despite rotation.
+            let source = if archive_attached {
+                "(SELECT id, timestamp, domain, query_type, client_ip, status, block_source, block_feature, response_time_ms, upstream FROM query_log
+                  UNION ALL
+                  SELECT id, timestamp, domain, query_type, client_ip, status, block_source, block_feature, response_time_ms, upstream FROM archive.query_log) AS q"
+            } else {
+                "query_log"
+            };
             let sql = format!(
                 "SELECT id, timestamp, domain, query_type, client_ip, status, block_source, block_feature, response_time_ms, upstream
-                 FROM query_log {} ORDER BY id DESC LIMIT ?",
-                where_sql
+                 FROM {} {} ORDER BY id DESC LIMIT ?",
+                source, where_sql
             );
             final_params.push(Box::new(limit as i64 + 1)); // fetch one extra to detect next page
 
@@ -260,24 +361,216 @@ impl QueryLog {
         Ok(updated)
     }
 
-    /// Delete entries older than the given number of days.
-    pub async fn purge_older_than(&self, days: u32) -> anyhow::Result<u64> {
-        let cutoff = Utc::now() - chrono::Duration::days(days as i64);
+    /// Delete entries older than the given number of minutes (both active
+    /// and archive DBs when attached).
+    pub async fn purge_older_than_minutes(&self, minutes: u32) -> anyhow::Result<u64> {
+        let cutoff = Utc::now() - chrono::Duration::minutes(minutes as i64);
         let cutoff_millis = cutoff.timestamp_millis();
+        let archive_attached = self.archive_attached.load(Ordering::Relaxed);
 
         let conn = self.conn.clone();
         let deleted = conn
             .call(move |conn| {
-                let count = conn.execute(
+                let mut count = conn.execute(
                     "DELETE FROM query_log WHERE timestamp < ?1",
                     params![cutoff_millis],
-                )?;
-                Ok(count as u64)
+                )? as u64;
+                if archive_attached {
+                    count += conn.execute(
+                        "DELETE FROM archive.query_log WHERE timestamp < ?1",
+                        params![cutoff_millis],
+                    )? as u64;
+                }
+                Ok(count)
             })
             .await?;
 
         if deleted > 0 {
             info!("Purged {} old query log entries", deleted);
+        }
+        Ok(deleted)
+    }
+
+    /// Rotate the oldest ~half of rows from the active DB into the archive DB.
+    ///
+    /// After rotation, the active DB has the newer half of its contents; the
+    /// archive gains the older half.  VACUUMs the active DB so the bytes
+    /// actually shrink on disk.  Data is preserved, still readable via
+    /// `search()`.
+    pub async fn rotate_to_archive(&self) -> anyhow::Result<u64> {
+        let archive_path = self.archive_path.clone();
+        let attached_flag = self.archive_attached.clone();
+
+        let conn = self.conn.clone();
+        let moved = conn
+            .call(move |conn| {
+                // Ensure archive exists with the same schema as active.  If it
+                // was already ATTACHed we reuse it; otherwise create it and
+                // attach fresh.
+                let was_attached = attached_flag.load(Ordering::Relaxed);
+                if !was_attached {
+                    conn.execute_batch(&format!(
+                        "ATTACH DATABASE '{}' AS archive;",
+                        archive_path.display()
+                    ))?;
+                }
+                conn.execute_batch(
+                    "CREATE TABLE IF NOT EXISTS archive.query_log (
+                         id              INTEGER PRIMARY KEY,
+                         timestamp       INTEGER NOT NULL,
+                         domain          TEXT NOT NULL,
+                         query_type      TEXT NOT NULL,
+                         client_ip       TEXT NOT NULL,
+                         status          TEXT NOT NULL,
+                         block_source    TEXT,
+                         block_feature   TEXT,
+                         response_time_ms INTEGER NOT NULL,
+                         upstream        TEXT
+                     );
+                     CREATE INDEX IF NOT EXISTS archive.idx_archive_timestamp
+                         ON query_log(timestamp DESC);",
+                )?;
+
+                // Find the median timestamp via count/2 offset; anything older
+                // moves into the archive.  SELECT first to avoid a giant
+                // single-statement INSERT..DELETE on a huge DB.
+                let total: i64 =
+                    conn.query_row("SELECT COUNT(*) FROM query_log", [], |r| r.get(0))?;
+                if total <= 1 {
+                    return Ok(0u64);
+                }
+                let half = total / 2;
+                let cutoff_id: Option<i64> = conn
+                    .query_row(
+                        "SELECT id FROM query_log ORDER BY id ASC LIMIT 1 OFFSET ?1",
+                        params![half],
+                        |r| r.get(0),
+                    )
+                    .ok();
+                let Some(cutoff_id) = cutoff_id else {
+                    return Ok(0u64);
+                };
+
+                let tx = conn.unchecked_transaction()?;
+                tx.execute(
+                    "INSERT OR IGNORE INTO archive.query_log
+                         (id, timestamp, domain, query_type, client_ip, status,
+                          block_source, block_feature, response_time_ms, upstream)
+                     SELECT id, timestamp, domain, query_type, client_ip, status,
+                            block_source, block_feature, response_time_ms, upstream
+                     FROM query_log WHERE id < ?1",
+                    params![cutoff_id],
+                )?;
+                let moved =
+                    tx.execute("DELETE FROM query_log WHERE id < ?1", params![cutoff_id])? as u64;
+                tx.commit()?;
+
+                // VACUUM the active DB so the file actually shrinks.  Attached
+                // databases must be detached for VACUUM, so we detach, vacuum,
+                // then reattach.
+                conn.execute_batch("DETACH DATABASE archive;")?;
+                conn.execute_batch("VACUUM;")?;
+                conn.execute_batch(&format!(
+                    "ATTACH DATABASE '{}' AS archive;",
+                    archive_path.display()
+                ))?;
+                attached_flag.store(true, Ordering::Relaxed);
+
+                Ok(moved)
+            })
+            .await?;
+
+        if moved > 0 {
+            info!(
+                "Rotated {} query log rows into archive {}",
+                moved,
+                self.archive_path.display()
+            );
+        }
+        Ok(moved)
+    }
+
+    /// Drop the archive DB entirely and delete its file.  Used by emergency
+    /// purge when free disk is below the floor.  Returns the number of bytes
+    /// freed (approximate — the file size just before deletion).
+    pub async fn drop_archive(&self) -> anyhow::Result<u64> {
+        let archive_path = self.archive_path.clone();
+        let attached_flag = self.archive_attached.clone();
+
+        let size_before = std::fs::metadata(&archive_path)
+            .map(|m| m.len())
+            .unwrap_or(0);
+
+        let conn = self.conn.clone();
+        conn.call(move |conn| {
+            if attached_flag.load(Ordering::Relaxed) {
+                let _ = conn.execute_batch("DETACH DATABASE archive;");
+                attached_flag.store(false, Ordering::Relaxed);
+            }
+            Ok(())
+        })
+        .await?;
+
+        // Remove the main archive file and the WAL / SHM sidecars, if any.
+        let _ = std::fs::remove_file(&archive_path);
+        let mut sidecar = archive_path.clone().into_os_string();
+        sidecar.push("-wal");
+        let _ = std::fs::remove_file(std::path::PathBuf::from(&sidecar));
+        let mut sidecar = archive_path.clone().into_os_string();
+        sidecar.push("-shm");
+        let _ = std::fs::remove_file(std::path::PathBuf::from(&sidecar));
+
+        if size_before > 0 {
+            warn!(
+                "Emergency purge: dropped query log archive ({} MB freed)",
+                size_before / (1024 * 1024)
+            );
+        }
+        Ok(size_before)
+    }
+
+    /// Trim the oldest `fraction` (0.0..=1.0) of rows from the active DB.
+    /// Used by emergency purge as a last resort when dropping the archive
+    /// wasn't enough to hit the free-disk floor.
+    pub async fn trim_active(&self, fraction: f32) -> anyhow::Result<u64> {
+        let frac = fraction.clamp(0.0, 1.0);
+        if frac == 0.0 {
+            return Ok(0);
+        }
+        let conn = self.conn.clone();
+        let deleted = conn
+            .call(move |conn| {
+                let total: i64 =
+                    conn.query_row("SELECT COUNT(*) FROM query_log", [], |r| r.get(0))?;
+                if total <= 1 {
+                    return Ok(0u64);
+                }
+                let to_drop = ((total as f32) * frac) as i64;
+                if to_drop <= 0 {
+                    return Ok(0u64);
+                }
+                let cutoff_id: Option<i64> = conn
+                    .query_row(
+                        "SELECT id FROM query_log ORDER BY id ASC LIMIT 1 OFFSET ?1",
+                        params![to_drop],
+                        |r| r.get(0),
+                    )
+                    .ok();
+                let Some(cutoff_id) = cutoff_id else {
+                    return Ok(0u64);
+                };
+                let deleted =
+                    conn.execute("DELETE FROM query_log WHERE id < ?1", params![cutoff_id])? as u64;
+                conn.execute_batch("VACUUM;")?;
+                Ok(deleted)
+            })
+            .await?;
+
+        if deleted > 0 {
+            warn!(
+                "Emergency purge: trimmed {} oldest rows from active query log",
+                deleted
+            );
         }
         Ok(deleted)
     }

@@ -2249,9 +2249,17 @@
 
                         <div class="logs-settings">
                             <label>
+                                <input type="checkbox" id="logEnabledCheckbox" onchange="saveLogSettings()">
+                                Enable query logging
+                            </label>
+                            <label>
                                 Query log retention:
-                                <input type="number" id="logRetentionInput" min="1" max="90" value="7">
-                                days
+                                <input type="number" id="logRetentionInput" min="1" value="7">
+                                <select id="logRetentionUnit">
+                                    <option value="minutes">minutes</option>
+                                    <option value="hours">hours</option>
+                                    <option value="days" selected>days</option>
+                                </select>
                             </label>
                             <label>
                                 Statistics retention:
@@ -2259,7 +2267,8 @@
                                 days
                             </label>
                             <button type="button" class="btn btn-sm" onclick="saveLogSettings()">Save</button>
-                            <label style="margin-left: auto;">
+                            <span class="logs-db-info" id="logsDbInfo" style="margin-left: auto; color: var(--text-muted); font-family: var(--font-mono); font-size: 12px;"></span>
+                            <label>
                                 <input type="checkbox" id="logAnonIpCheckbox" onchange="saveLogSettings()">
                                 Anonymize client IPs
                             </label>
@@ -5062,6 +5071,8 @@
             ['doq_max_streams_per_connection', 'DoQ streams/conn',          'streams',  'QUIC concurrent bidi streams'],
             ['blocklist_max_mb',               'Blocklist download cap',    'MB',       'Max size per downloaded list'],
             ['web_upload_max_mb',              'Web upload cap',            'MB',       'Max cert/key/p12 upload'],
+            ['query_log_rotate_mb',            'Query log rotate size',     'MB',       'Active DB rotates to archive when larger'],
+            ['query_log_free_disk_floor_mb',   'Query log free-disk floor', 'MB',       'Emergency purge when free disk below this'],
         ];
 
         // Cached auto-scaled values so resetLimitsForm() can fill placeholders
@@ -5799,26 +5810,69 @@
             } catch (_) { }
         }
 
+        // Map the backend's canonical minutes to whichever display unit
+        // renders the friendliest whole number (minutes when <60, hours when
+        // a whole number of hours <48h, else days).
+        function minutesToFriendlyUnit(minutes) {
+            if (minutes < 60) return { value: minutes, unit: 'minutes' };
+            if (minutes % 1440 === 0 && minutes >= 1440) {
+                return { value: minutes / 1440, unit: 'days' };
+            }
+            if (minutes % 60 === 0) return { value: minutes / 60, unit: 'hours' };
+            return { value: minutes, unit: 'minutes' };
+        }
+
+        function formatBytesMB(bytes) {
+            if (!bytes || bytes < 0) return '0 MB';
+            const mb = bytes / (1024 * 1024);
+            return mb < 1 ? (bytes / 1024).toFixed(0) + ' KB' : mb.toFixed(1) + ' MB';
+        }
+
         async function refreshLogSettings() {
             try {
                 const res = await fetch('/api/logs/settings');
                 const data = await res.json();
-                document.getElementById('logRetentionInput').value = data.query_log_retention_days;
+                document.getElementById('logEnabledCheckbox').checked = !!data.query_log_enabled;
+                const { value, unit } = minutesToFriendlyUnit(data.query_log_retention_minutes || 10080);
+                document.getElementById('logRetentionInput').value = value;
+                document.getElementById('logRetentionUnit').value = unit;
                 document.getElementById('statsRetentionInput').value = data.stats_retention_days;
                 document.getElementById('logAnonIpCheckbox').checked = data.anonymize_client_ip;
+
+                const info = document.getElementById('logsDbInfo');
+                if (info) {
+                    const active = formatBytesMB(data.active_db_bytes);
+                    const parts = ['active ' + active];
+                    if (data.archive_attached && data.archive_db_bytes > 0) {
+                        parts.push('archive ' + formatBytesMB(data.archive_db_bytes));
+                    }
+                    info.textContent = 'DB: ' + parts.join(' · ');
+                }
             } catch (e) { console.error('Failed to load log settings', e); }
         }
 
         async function saveLogSettings() {
-            const query_log_retention_days = parseInt(document.getElementById('logRetentionInput').value, 10);
+            const query_log_enabled = document.getElementById('logEnabledCheckbox').checked;
+            const rawNum = parseInt(document.getElementById('logRetentionInput').value, 10);
+            const unit = document.getElementById('logRetentionUnit').value;
+            let query_log_retention_minutes = rawNum;
+            if (unit === 'hours') query_log_retention_minutes = rawNum * 60;
+            else if (unit === 'days') query_log_retention_minutes = rawNum * 1440;
             const stats_retention_days = parseInt(document.getElementById('statsRetentionInput').value, 10);
             const anonymize_client_ip = document.getElementById('logAnonIpCheckbox').checked;
             try {
                 await fetch('/api/logs/settings', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ query_log_retention_days, stats_retention_days, anonymize_client_ip })
+                    body: JSON.stringify({
+                        query_log_enabled,
+                        query_log_retention_minutes,
+                        stats_retention_days,
+                        anonymize_client_ip,
+                    })
                 });
+                // Reload the reported state so the DB-size badge refreshes.
+                refreshLogSettings();
             } catch (e) { console.error('Failed to save log settings', e); }
         }
 

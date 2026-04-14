@@ -32,6 +32,12 @@ pub struct ResourceLimits {
     pub doq_max_streams_per_connection: u64,
     pub blocklist_max_bytes: usize,
     pub web_upload_max_bytes: usize,
+    /// When the query log file grows past this, rotate older rows to an
+    /// archive DB (data is preserved, still visible in the UI).
+    pub query_log_rotate_bytes: u64,
+    /// When free disk on the query log's filesystem falls below this, run an
+    /// emergency purge — first drop the archive, then trim the active DB.
+    pub query_log_free_disk_floor_bytes: u64,
 }
 
 static LIMITS: OnceLock<ResourceLimits> = OnceLock::new();
@@ -63,7 +69,7 @@ pub fn init(cfg: &LimitsConfig) -> &'static ResourceLimits {
         }
     );
     info!(
-        "Resource limits: dns_cache={} ns_cache={} udp_inflight={} tcp={} dot={} doh={} doq_streams={} blocklist={}MB upload={}MB",
+        "Resource limits: dns_cache={} ns_cache={} udp_inflight={} tcp={} dot={} doh={} doq_streams={} blocklist={}MB upload={}MB qlog_rotate={}MB qlog_disk_floor={}MB",
         limits.dns_cache_entries,
         limits.ns_cache_entries,
         limits.udp_max_inflight,
@@ -73,6 +79,8 @@ pub fn init(cfg: &LimitsConfig) -> &'static ResourceLimits {
         limits.doq_max_streams_per_connection,
         limits.blocklist_max_bytes / MB as usize,
         limits.web_upload_max_bytes / MB as usize,
+        limits.query_log_rotate_bytes / MB,
+        limits.query_log_free_disk_floor_bytes / MB,
     );
     let _ = LIMITS.set(limits);
     LIMITS.get().unwrap()
@@ -139,6 +147,10 @@ pub fn compute(hw: &HardwareProfile, cfg: &LimitsConfig) -> ResourceLimits {
         doq_max_streams_per_connection: (cpu as u64 * 16).clamp(64, 512),
         blocklist_max_bytes: (ram_mb * MB as usize / 8).clamp(50 * MB as usize, 500 * MB as usize),
         web_upload_max_bytes: (ram_mb * MB as usize / 64).clamp(2 * MB as usize, 50 * MB as usize),
+        // Fixed defaults — these are disk policy, not hardware-scaled.
+        // Operators almost always override the free-disk floor for their box.
+        query_log_rotate_bytes: 2048 * MB,
+        query_log_free_disk_floor_bytes: 500 * MB,
     };
 
     ResourceLimits {
@@ -159,6 +171,14 @@ pub fn compute(hw: &HardwareProfile, cfg: &LimitsConfig) -> ResourceLimits {
             .web_upload_max_mb
             .map(|mb| mb * MB as usize)
             .unwrap_or(auto.web_upload_max_bytes),
+        query_log_rotate_bytes: cfg
+            .query_log_rotate_mb
+            .map(|mb| mb * MB)
+            .unwrap_or(auto.query_log_rotate_bytes),
+        query_log_free_disk_floor_bytes: cfg
+            .query_log_free_disk_floor_mb
+            .map(|mb| mb * MB)
+            .unwrap_or(auto.query_log_free_disk_floor_bytes),
     }
 }
 
