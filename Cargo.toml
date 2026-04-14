@@ -1,6 +1,6 @@
 [package]
 name = "oxi-dns"
-version = "0.6.2"
+version = "0.6.3"
 edition = "2021"
 description = "An AdGuardHome-style DNS sinkhole server written in Rust with DoT, DoH, and DoQ support"
 license = "AGPL-3.0-only"
