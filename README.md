@@ -1242,6 +1242,7 @@ Please note that this list is not a promise, rather thoughts I might change my m
 ### Goals for Version 3:
 - make the log entries clickable and show more information about the query
 - sort logs by ...
+- add to the logs the type of request (dot, doh, dns, etc.)
 - dns rewrites
 - ability to disable the Web UI (feature)
   - including all the feaures that are not essential for the DNS server to run. (like statistics, logs, etc.)
