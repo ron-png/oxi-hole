@@ -1240,8 +1240,6 @@ Please note that this list is not a promise, rather thoughts I might change my m
 - purge all dead code
 
 ### Goals for Version 3:
-- More statistics, fancy graphs and more
-- Statistics need to be persistent
 - make the log entries clickable and show more information about the query
 - sort logs by ...
 - dns rewrites
