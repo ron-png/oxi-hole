@@ -137,10 +137,8 @@ pub fn compute(hw: &HardwareProfile, cfg: &LimitsConfig) -> ResourceLimits {
         dot_max_connections: (cpu * 128).clamp(512, 8_192),
         doh_max_connections: (cpu * 128).clamp(512, 8_192),
         doq_max_streams_per_connection: (cpu as u64 * 16).clamp(64, 512),
-        blocklist_max_bytes: (ram_mb * MB as usize / 8)
-            .clamp(50 * MB as usize, 500 * MB as usize),
-        web_upload_max_bytes: (ram_mb * MB as usize / 64)
-            .clamp(2 * MB as usize, 50 * MB as usize),
+        blocklist_max_bytes: (ram_mb * MB as usize / 8).clamp(50 * MB as usize, 500 * MB as usize),
+        web_upload_max_bytes: (ram_mb * MB as usize / 64).clamp(2 * MB as usize, 50 * MB as usize),
     };
 
     ResourceLimits {

@@ -2311,9 +2311,21 @@ fn clamp_opt<T: PartialOrd + Copy>(
 
 /// Validate a `LimitsConfig` override payload against the acceptable bounds.
 fn validate_limits(cfg: &crate::config::LimitsConfig) -> Result<(), String> {
-    clamp_opt("dns_cache_entries", cfg.dns_cache_entries, LIMIT_BOUNDS_DNS_CACHE)?;
-    clamp_opt("ns_cache_entries", cfg.ns_cache_entries, LIMIT_BOUNDS_NS_CACHE)?;
-    clamp_opt("udp_max_inflight", cfg.udp_max_inflight, LIMIT_BOUNDS_UDP_INFLIGHT)?;
+    clamp_opt(
+        "dns_cache_entries",
+        cfg.dns_cache_entries,
+        LIMIT_BOUNDS_DNS_CACHE,
+    )?;
+    clamp_opt(
+        "ns_cache_entries",
+        cfg.ns_cache_entries,
+        LIMIT_BOUNDS_NS_CACHE,
+    )?;
+    clamp_opt(
+        "udp_max_inflight",
+        cfg.udp_max_inflight,
+        LIMIT_BOUNDS_UDP_INFLIGHT,
+    )?;
     clamp_opt(
         "tcp_max_connections",
         cfg.tcp_max_connections,
@@ -2334,8 +2346,16 @@ fn validate_limits(cfg: &crate::config::LimitsConfig) -> Result<(), String> {
         cfg.doq_max_streams_per_connection,
         LIMIT_BOUNDS_DOQ_STREAMS,
     )?;
-    clamp_opt("blocklist_max_mb", cfg.blocklist_max_mb, LIMIT_BOUNDS_BLOCKLIST_MB)?;
-    clamp_opt("web_upload_max_mb", cfg.web_upload_max_mb, LIMIT_BOUNDS_UPLOAD_MB)?;
+    clamp_opt(
+        "blocklist_max_mb",
+        cfg.blocklist_max_mb,
+        LIMIT_BOUNDS_BLOCKLIST_MB,
+    )?;
+    clamp_opt(
+        "web_upload_max_mb",
+        cfg.web_upload_max_mb,
+        LIMIT_BOUNDS_UPLOAD_MB,
+    )?;
     Ok(())
 }
 
