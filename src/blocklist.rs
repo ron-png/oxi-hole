@@ -198,6 +198,7 @@ impl BlocklistManager {
     /// Applies per-source `@@` exceptions before returning, so callers
     /// only see the final filtered domain list.
     async fn fetch_blocklist(&self, source: &str) -> anyhow::Result<Vec<String>> {
+        let max_bytes = crate::resources::limits().blocklist_max_bytes;
         let content = if source.starts_with("http://") || source.starts_with("https://") {
             let client = reqwest::Client::new();
             let resp = client
@@ -205,8 +206,43 @@ impl BlocklistManager {
                 .header("Cache-Control", "no-cache")
                 .send()
                 .await?;
-            resp.text().await?
+            // Fast fail on oversized lists when Content-Length is present.
+            if let Some(len) = resp.content_length() {
+                if len as usize > max_bytes {
+                    anyhow::bail!(
+                        "Blocklist {} refused: Content-Length {} bytes exceeds limit {} bytes",
+                        source,
+                        len,
+                        max_bytes
+                    );
+                }
+            }
+            // Stream chunk-by-chunk and cap in-memory accumulation so
+            // servers that omit Content-Length — or lie about it — still
+            // can't OOM us.
+            let mut resp = resp;
+            let mut buf: Vec<u8> = Vec::new();
+            while let Some(chunk) = resp.chunk().await? {
+                if buf.len() + chunk.len() > max_bytes {
+                    anyhow::bail!(
+                        "Blocklist {} refused: exceeded size limit of {} bytes",
+                        source,
+                        max_bytes
+                    );
+                }
+                buf.extend_from_slice(&chunk);
+            }
+            String::from_utf8(buf)?
         } else {
+            let meta = tokio::fs::metadata(source).await?;
+            if meta.len() as usize > max_bytes {
+                anyhow::bail!(
+                    "Blocklist {} refused: file size {} bytes exceeds limit {} bytes",
+                    source,
+                    meta.len(),
+                    max_bytes
+                );
+            }
             tokio::fs::read_to_string(source).await?
         };
 

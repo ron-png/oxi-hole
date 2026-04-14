@@ -14,9 +14,6 @@ use tracing::{debug, error, warn};
 /// Minimum valid DNS message size (header only, RFC 1035 §4.1.1).
 const MIN_DNS_MESSAGE_LEN: usize = 12;
 
-/// Maximum concurrent in-flight UDP query tasks to prevent resource exhaustion under flood.
-const MAX_CONCURRENT_UDP_TASKS: usize = 1024;
-
 /// Extract the EDNS0 UDP payload size from an OPT record in the request.
 /// Returns the client-advertised buffer size, or 512 if no OPT is present (RFC 1035 default).
 fn get_edns_udp_size(packet: &[u8]) -> usize {
@@ -127,7 +124,8 @@ pub async fn run(
         let _ = tx.send(());
     }
     let mut buf = vec![0u8; 4096];
-    let semaphore = Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_UDP_TASKS));
+    let max_inflight = crate::resources::limits().udp_max_inflight;
+    let semaphore = Arc::new(tokio::sync::Semaphore::new(max_inflight));
 
     loop {
         let (len, src) = match socket.recv_from(&mut buf).await {
@@ -153,7 +151,7 @@ pub async fn run(
             Err(_) => {
                 warn!(
                     "UDP task limit reached ({}), dropping packet from {}",
-                    MAX_CONCURRENT_UDP_TASKS, src
+                    max_inflight, src
                 );
                 continue;
             }

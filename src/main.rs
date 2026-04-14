@@ -13,6 +13,7 @@ mod features;
 mod persistent_stats;
 mod query_log;
 mod reconfigure;
+mod resources;
 mod stats;
 mod tls;
 mod update;
@@ -88,6 +89,10 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let config = Config::load(&config_path)?;
+
+    // Detect hardware and apply limits BEFORE any listener/TLS setup, since
+    // those consult the singleton (e.g. DoQ transport stream caps).
+    resources::init(&config.limits);
 
     info!("Starting Oxi-DNS server v{}", VERSION);
     info!("DNS (UDP) listen: {:?}", config.dns.listen);

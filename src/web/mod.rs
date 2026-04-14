@@ -491,6 +491,10 @@ pub async fn run_web_server(
         .route("/api/system/version/check", post(api_version_check))
         .route("/api/system/update", post(api_perform_update))
         .route("/api/system/restart", post(api_restart))
+        .route(
+            "/api/system/limits",
+            get(api_get_limits).post(api_set_limits),
+        )
         .route("/api/system/update/status", get(api_update_status))
         .route(
             "/api/system/update/status/dismiss",
@@ -498,7 +502,12 @@ pub async fn run_web_server(
         )
         // TLS certificate management
         .route("/api/system/tls", get(api_tls_status))
-        .route("/api/system/tls/upload", post(api_tls_upload))
+        .route(
+            "/api/system/tls/upload",
+            post(api_tls_upload).layer(axum::extract::DefaultBodyLimit::max(
+                crate::resources::limits().web_upload_max_bytes,
+            )),
+        )
         .route("/api/system/tls/remove", post(api_tls_remove))
         // ACME certificate management
         .route("/api/system/tls/acme/issue", post(api_acme_issue))
@@ -2273,6 +2282,170 @@ async fn api_restart(
         std::process::exit(0);
     });
     Ok(StatusCode::OK)
+}
+
+// ==================== Resource Limits ====================
+
+/// Floor/ceiling bounds accepted when operators override a limit through the web UI.
+/// The lower bound matches the auto-scale floor; the upper bound matches the auto-scale
+/// ceiling, so config-file overrides can reach the same extremes as detected hardware.
+const LIMIT_BOUNDS_DNS_CACHE: (usize, usize) = (1_000, 2_000_000);
+const LIMIT_BOUNDS_NS_CACHE: (usize, usize) = (100, 1_000_000);
+const LIMIT_BOUNDS_UDP_INFLIGHT: (usize, usize) = (64, 131_072);
+const LIMIT_BOUNDS_CONNECTIONS: (usize, usize) = (16, 65_535);
+const LIMIT_BOUNDS_DOQ_STREAMS: (u64, u64) = (4, 4_096);
+const LIMIT_BOUNDS_BLOCKLIST_MB: (usize, usize) = (1, 2_048);
+const LIMIT_BOUNDS_UPLOAD_MB: (usize, usize) = (1, 512);
+
+fn clamp_opt<T: PartialOrd + Copy>(
+    name: &str,
+    v: Option<T>,
+    (min, max): (T, T),
+) -> Result<Option<T>, String> {
+    match v {
+        None => Ok(None),
+        Some(x) if x < min || x > max => Err(format!("{} out of range", name)),
+        Some(x) => Ok(Some(x)),
+    }
+}
+
+/// Validate a `LimitsConfig` override payload against the acceptable bounds.
+fn validate_limits(cfg: &crate::config::LimitsConfig) -> Result<(), String> {
+    clamp_opt("dns_cache_entries", cfg.dns_cache_entries, LIMIT_BOUNDS_DNS_CACHE)?;
+    clamp_opt("ns_cache_entries", cfg.ns_cache_entries, LIMIT_BOUNDS_NS_CACHE)?;
+    clamp_opt("udp_max_inflight", cfg.udp_max_inflight, LIMIT_BOUNDS_UDP_INFLIGHT)?;
+    clamp_opt(
+        "tcp_max_connections",
+        cfg.tcp_max_connections,
+        LIMIT_BOUNDS_CONNECTIONS,
+    )?;
+    clamp_opt(
+        "dot_max_connections",
+        cfg.dot_max_connections,
+        LIMIT_BOUNDS_CONNECTIONS,
+    )?;
+    clamp_opt(
+        "doh_max_connections",
+        cfg.doh_max_connections,
+        LIMIT_BOUNDS_CONNECTIONS,
+    )?;
+    clamp_opt(
+        "doq_max_streams_per_connection",
+        cfg.doq_max_streams_per_connection,
+        LIMIT_BOUNDS_DOQ_STREAMS,
+    )?;
+    clamp_opt("blocklist_max_mb", cfg.blocklist_max_mb, LIMIT_BOUNDS_BLOCKLIST_MB)?;
+    clamp_opt("web_upload_max_mb", cfg.web_upload_max_mb, LIMIT_BOUNDS_UPLOAD_MB)?;
+    Ok(())
+}
+
+fn limits_to_json(l: &crate::resources::ResourceLimits) -> serde_json::Value {
+    serde_json::json!({
+        "dns_cache_entries": l.dns_cache_entries,
+        "ns_cache_entries": l.ns_cache_entries,
+        "udp_max_inflight": l.udp_max_inflight,
+        "tcp_max_connections": l.tcp_max_connections,
+        "dot_max_connections": l.dot_max_connections,
+        "doh_max_connections": l.doh_max_connections,
+        "doq_max_streams_per_connection": l.doq_max_streams_per_connection,
+        "blocklist_max_mb": l.blocklist_max_bytes / (1024 * 1024),
+        "web_upload_max_mb": l.web_upload_max_bytes / (1024 * 1024),
+    })
+}
+
+async fn api_get_limits(
+    State(state): State<AppState>,
+    axum::Extension(user): axum::Extension<AuthenticatedUser>,
+) -> Response {
+    if !user.permissions.contains(&Permission::ManageSystem) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+
+    let hw = crate::resources::detect_hardware();
+    let active = crate::resources::limits();
+
+    // Auto-scaled values = what compute() would pick with zero overrides.
+    let auto = crate::resources::compute(&hw, &crate::config::LimitsConfig::default());
+
+    // Configured overrides live in config.toml's [limits] section.
+    let configured = Config::load(&state.config_path)
+        .map(|c| c.limits)
+        .unwrap_or_default();
+
+    Json(serde_json::json!({
+        "hardware": {
+            "cpu_cores": hw.cpu_cores,
+            "ram_mb": hw.ram_mb,
+            "cgroup_limited": hw.cgroup_limited,
+        },
+        "auto": limits_to_json(&auto),
+        "active": limits_to_json(active),
+        "configured": {
+            "dns_cache_entries": configured.dns_cache_entries,
+            "ns_cache_entries": configured.ns_cache_entries,
+            "udp_max_inflight": configured.udp_max_inflight,
+            "tcp_max_connections": configured.tcp_max_connections,
+            "dot_max_connections": configured.dot_max_connections,
+            "doh_max_connections": configured.doh_max_connections,
+            "doq_max_streams_per_connection": configured.doq_max_streams_per_connection,
+            "blocklist_max_mb": configured.blocklist_max_mb,
+            "web_upload_max_mb": configured.web_upload_max_mb,
+        },
+        "bounds": {
+            "dns_cache_entries": LIMIT_BOUNDS_DNS_CACHE,
+            "ns_cache_entries": LIMIT_BOUNDS_NS_CACHE,
+            "udp_max_inflight": LIMIT_BOUNDS_UDP_INFLIGHT,
+            "tcp_max_connections": LIMIT_BOUNDS_CONNECTIONS,
+            "dot_max_connections": LIMIT_BOUNDS_CONNECTIONS,
+            "doh_max_connections": LIMIT_BOUNDS_CONNECTIONS,
+            "doq_max_streams_per_connection": LIMIT_BOUNDS_DOQ_STREAMS,
+            "blocklist_max_mb": LIMIT_BOUNDS_BLOCKLIST_MB,
+            "web_upload_max_mb": LIMIT_BOUNDS_UPLOAD_MB,
+        },
+    }))
+    .into_response()
+}
+
+async fn api_set_limits(
+    State(state): State<AppState>,
+    axum::Extension(user): axum::Extension<AuthenticatedUser>,
+    Json(payload): Json<crate::config::LimitsConfig>,
+) -> Response {
+    if !user.permissions.contains(&Permission::ManageSystem) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+
+    if let Err(e) = validate_limits(&payload) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": e })),
+        )
+            .into_response();
+    }
+
+    let mut config = match Config::load(&state.config_path) {
+        Ok(c) => c,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": format!("{}", e) })),
+            )
+                .into_response();
+        }
+    };
+    config.limits = payload;
+    if let Err(e) = config.save(&state.config_path) {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": format!("{}", e) })),
+        )
+            .into_response();
+    }
+
+    info!("Resource limits updated; triggering graceful restart");
+    let _ = state.restart_signal.send(true);
+
+    Json(serde_json::json!({ "success": true, "restarting": true })).into_response()
 }
 
 // ==================== Update Status ====================

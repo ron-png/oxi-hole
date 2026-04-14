@@ -1760,6 +1760,56 @@
             font-size: 13px;
         }
 
+        .limits-grid {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) 140px 180px;
+            gap: 8px 16px;
+            align-items: center;
+            font-size: 13px;
+        }
+
+        .limits-grid .limits-head {
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+            color: var(--text-muted);
+            font-weight: 600;
+            padding-bottom: 4px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .limits-grid .limits-label {
+            color: var(--text-secondary);
+        }
+
+        .limits-grid .limits-label small {
+            display: block;
+            color: var(--text-muted);
+            font-size: 11px;
+            margin-top: 1px;
+        }
+
+        .limits-grid input[type="number"] {
+            width: 100%;
+            padding: 4px 8px;
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            background: var(--bg-page);
+            color: var(--text-primary);
+            font-family: var(--font-mono);
+            font-size: 13px;
+        }
+
+        .limits-grid .limits-status {
+            color: var(--text-muted);
+            font-family: var(--font-mono);
+            font-size: 12px;
+        }
+
+        .limits-grid .limits-status .limits-diverged {
+            color: var(--accent-warning, #d97706);
+        }
+
         .attribution-cell {
             cursor: default;
         }
@@ -2695,6 +2745,22 @@
                     <div
                         style="margin-top: 8px; font-size: 12px; color: var(--text-muted); font-family: var(--font-mono);">
                         <span id="lastVersionCheckText">Last checked: never</span>
+                    </div>
+                </div>
+                <div class="limits-settings manage-system-only" style="margin-top: 24px;">
+                    <h3>Resource Limits</h3>
+                    <p style="color: var(--text-muted); font-size: 13px; margin: 4px 0 12px;">
+                        Cache sizes, connection caps, and upload limits. Auto-scaled from detected hardware at startup.
+                        Leave a field blank to keep auto-scaling, or enter a value to override.
+                        Saving triggers a graceful restart so new limits take effect.
+                    </p>
+                    <div id="limitsHardwareLine" style="font-size: 12px; color: var(--text-muted); font-family: var(--font-mono); margin-bottom: 12px;">
+                        Detecting hardware...
+                    </div>
+                    <div class="limits-grid" id="limitsGrid">Loading...</div>
+                    <div style="margin-top: 16px; display: flex; gap: 8px; justify-content: flex-end;">
+                        <button type="button" class="btn btn-sm" onclick="resetLimitsForm()">Reset to Auto</button>
+                        <button type="button" class="btn btn-accent btn-sm" onclick="saveLimits()">Save &amp; Restart</button>
                     </div>
                 </div>
             </div>
@@ -4980,6 +5046,125 @@
                 document.getElementById('ipv6Checkbox').checked = data.enabled;
             } catch (e) { console.error('Failed to load IPv6 state', e); }
             refreshVersion();
+            refreshLimits();
+        }
+
+        // ---- Resource Limits ----
+
+        // Ordered list: key, human label, unit, optional hint shown under the label.
+        const LIMIT_FIELDS = [
+            ['dns_cache_entries',              'DNS response cache',        'entries',  'Domain→answer cache'],
+            ['ns_cache_entries',               'NS cache',                  'entries',  'Per-zone delegation cache'],
+            ['udp_max_inflight',               'UDP in-flight queries',     'tasks',    'Concurrent UDP handlers'],
+            ['tcp_max_connections',            'TCP connections',           'conns',    'Concurrent plain-TCP DNS'],
+            ['dot_max_connections',            'DoT connections',           'conns',    'Concurrent DNS-over-TLS'],
+            ['doh_max_connections',            'DoH connections',           'conns',    'Concurrent DNS-over-HTTPS'],
+            ['doq_max_streams_per_connection', 'DoQ streams/conn',          'streams',  'QUIC concurrent bidi streams'],
+            ['blocklist_max_mb',               'Blocklist download cap',    'MB',       'Max size per downloaded list'],
+            ['web_upload_max_mb',              'Web upload cap',            'MB',       'Max cert/key/p12 upload'],
+        ];
+
+        // Cached auto-scaled values so resetLimitsForm() can fill placeholders
+        // even before a fresh refresh completes.
+        let lastLimitsResponse = null;
+
+        async function refreshLimits() {
+            const grid = document.getElementById('limitsGrid');
+            const hwLine = document.getElementById('limitsHardwareLine');
+            if (!grid || !hwLine) return;
+            try {
+                const res = await fetch('/api/system/limits');
+                if (!res.ok) {
+                    grid.textContent = 'Failed to load resource limits.';
+                    return;
+                }
+                const data = await res.json();
+                lastLimitsResponse = data;
+
+                const { cpu_cores, ram_mb, cgroup_limited } = data.hardware;
+                hwLine.textContent =
+                    'Hardware: ' + cpu_cores + ' CPU cores, ' + ram_mb + ' MB RAM' +
+                    (cgroup_limited ? ' (cgroup-limited)' : '');
+
+                // Re-render the grid rows. Header first, then one row per field.
+                let html =
+                    '<div class="limits-head">Limit</div>' +
+                    '<div class="limits-head">Override</div>' +
+                    '<div class="limits-head">Auto / Active</div>';
+
+                for (const [key, label, unit, hint] of LIMIT_FIELDS) {
+                    const auto = data.auto[key];
+                    const active = data.active[key];
+                    const configured = data.configured[key];
+                    const bounds = data.bounds[key] || [0, 0];
+                    const diverged = active !== auto;
+
+                    html += '<div class="limits-label">' + label +
+                        ' <small>' + hint + ' (' + unit + ')</small></div>';
+
+                    html += '<div><input type="number" id="limit-' + key +
+                        '" min="' + bounds[0] + '" max="' + bounds[1] +
+                        '" placeholder="' + auto + '"' +
+                        (configured != null ? ' value="' + configured + '"' : '') +
+                        '></div>';
+
+                    html += '<div class="limits-status">auto ' + auto +
+                        ' &middot; <span' + (diverged ? ' class="limits-diverged"' : '') +
+                        '>running ' + active + '</span></div>';
+                }
+                grid.innerHTML = html;
+            } catch (e) {
+                console.error('Failed to refresh limits', e);
+                grid.textContent = 'Failed to load resource limits.';
+            }
+        }
+
+        function resetLimitsForm() {
+            // Clear every override input so saving will write an empty [limits]
+            // block and every field returns to its auto-scaled value.
+            for (const [key] of LIMIT_FIELDS) {
+                const el = document.getElementById('limit-' + key);
+                if (el) el.value = '';
+            }
+        }
+
+        async function saveLimits() {
+            const payload = {};
+            for (const [key] of LIMIT_FIELDS) {
+                const el = document.getElementById('limit-' + key);
+                if (!el) continue;
+                const v = el.value.trim();
+                if (v === '') {
+                    payload[key] = null;
+                    continue;
+                }
+                const n = Number(v);
+                if (!Number.isFinite(n) || n < 0 || !Number.isInteger(n)) {
+                    alert('Invalid value for ' + key + ': must be a non-negative integer.');
+                    return;
+                }
+                payload[key] = n;
+            }
+
+            try {
+                const res = await fetch('/api/system/limits', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload),
+                });
+                if (!res.ok) {
+                    const err = await res.json().catch(() => ({ error: 'Save failed' }));
+                    alert('Save failed: ' + (err.error || res.statusText));
+                    return;
+                }
+                // Server has triggered a graceful restart. Show a banner and
+                // re-fetch after ~6s when the new process is up.
+                const hwLine = document.getElementById('limitsHardwareLine');
+                if (hwLine) hwLine.textContent = 'Restarting — new limits apply in a few seconds...';
+                setTimeout(refreshLimits, 6000);
+            } catch (e) {
+                alert('Save failed: ' + e.message);
+            }
         }
 
         async function toggleAutoUpdate(enabled) {

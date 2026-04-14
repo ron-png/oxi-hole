@@ -10,8 +10,8 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
-use tokio::sync::RwLock;
-use tracing::{debug, error, info};
+use tokio::sync::{RwLock, Semaphore};
+use tracing::{debug, error, info, warn};
 
 /// Idle timeout for plain TCP DNS connections in seconds (RFC 7766 §6.2.3).
 const TCP_IDLE_TIMEOUT_SECS: u64 = 30;
@@ -51,13 +51,31 @@ pub async fn run(
 ) -> anyhow::Result<()> {
     let std_listener = bind_tcp_reuse_port(&addr)?;
     let listener = TcpListener::from_std(std_listener)?;
-    info!("Plain TCP DNS listener ready on {}", addr);
+    let max_connections = crate::resources::limits().tcp_max_connections;
+    let semaphore = Arc::new(Semaphore::new(max_connections));
+    info!(
+        "Plain TCP DNS listener ready on {} (max {} concurrent connections)",
+        addr, max_connections
+    );
 
     loop {
         let (tcp_stream, peer) = match listener.accept().await {
             Ok(r) => r,
             Err(e) => {
                 error!("TCP DNS accept error: {}", e);
+                continue;
+            }
+        };
+
+        // Backpressure: drop under flood rather than spawning unbounded tasks.
+        let permit = match semaphore.clone().try_acquire_owned() {
+            Ok(p) => p,
+            Err(_) => {
+                warn!(
+                    "TCP DNS connection limit reached ({}), dropping {}",
+                    max_connections, peer
+                );
+                drop(tcp_stream);
                 continue;
             }
         };
@@ -72,6 +90,7 @@ pub async fn run(
         let ipv6 = ipv6_enabled.clone();
 
         tokio::spawn(async move {
+            let _permit = permit; // hold permit for task lifetime
             if let Err(e) = handle_tcp_connection(
                 tcp_stream,
                 &peer.ip().to_string(),

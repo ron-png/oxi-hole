@@ -659,9 +659,6 @@ impl CacheEntry {
 
 const CACHE_TTL_FLOOR: u32 = 5;
 const CACHE_TTL_CEILING: u32 = 86400;
-/// Maximum number of cached DNS responses. When exceeded during eviction,
-/// entries closest to expiry are dropped first.
-const CACHE_MAX_SIZE: usize = 100_000;
 
 /// Extract the appropriate cache TTL from a DNS response.
 /// For negative responses (NXDOMAIN/NODATA), uses the SOA minimum TTL
@@ -901,22 +898,43 @@ impl UpstreamForwarder {
         self.cache.retain(|_, entry| !entry.is_expired());
         self.ns_cache.retain(|_, entry| !entry.is_expired());
 
-        // Enforce max cache size: drop entries closest to expiry
-        if self.cache.len() > CACHE_MAX_SIZE {
+        // Enforce max cache sizes — drop entries closest to expiry first.
+        let limits = crate::resources::limits();
+        let cache_max = limits.dns_cache_entries;
+        if self.cache.len() > cache_max {
             let mut entries: Vec<((String, u16), Instant)> = self
                 .cache
                 .iter()
                 .map(|e| (e.key().clone(), e.value().expires_at))
                 .collect();
             entries.sort_by_key(|(_, exp)| *exp);
-            let to_remove = self.cache.len() - CACHE_MAX_SIZE;
+            let to_remove = self.cache.len() - cache_max;
             for (key, _) in entries.into_iter().take(to_remove) {
                 self.cache.remove(&key);
             }
             tracing::info!(
                 "Cache size limit enforced: evicted {} entries (max {})",
                 to_remove,
-                CACHE_MAX_SIZE
+                cache_max
+            );
+        }
+
+        let ns_max = limits.ns_cache_entries;
+        if self.ns_cache.len() > ns_max {
+            let mut entries: Vec<(String, Instant)> = self
+                .ns_cache
+                .iter()
+                .map(|e| (e.key().clone(), e.value().expires_at))
+                .collect();
+            entries.sort_by_key(|(_, exp)| *exp);
+            let to_remove = self.ns_cache.len() - ns_max;
+            for (key, _) in entries.into_iter().take(to_remove) {
+                self.ns_cache.remove(&key);
+            }
+            tracing::info!(
+                "NS cache size limit enforced: evicted {} entries (max {})",
+                to_remove,
+                ns_max
             );
         }
 

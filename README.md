@@ -60,6 +60,7 @@ Then open the dashboard at **http://<host>:9853** (or **https://<host>:9854** wi
   - [\[tls.acme\]](#tlsacme)
   - [\[system\]](#system)
   - [\[log\]](#log)
+  - [\[limits\]](#limits)
 - [Command-line options](#command-line-options)
 - [Reconfigure](#reconfigure)
 - [HTTPS & Reverse Proxy](#https--reverse-proxy)
@@ -470,6 +471,54 @@ Automatic certificate management via Let's Encrypt (or compatible CA).
 | `stats_retention_days` | integer | `90` | Days to keep historical statistics. |
 | `anonymize_client_ip` | bool | `false` | Anonymize client IPs in the query log (e.g. `192.168.1.100` becomes `192.168.1.0`). |
 
+### `[limits]`
+
+Oxi-DNS detects the available CPU cores and memory at startup (cgroup-aware
+on Linux containers — host RAM is clamped to the cgroup limit when smaller)
+and scales internal caps accordingly.  Caches grow with RAM, connection and
+task counts grow with CPU, and per-request buffers stay small regardless.
+The chosen values are logged at startup on the line beginning
+`Resource limits:`.
+
+Every key below is **optional**; unset keys use the hardware-scaled
+default.  Set a key to override just that one cap — the others keep
+auto-scaling.  All memory values are interpreted as mebibytes (1 MB = 1024×1024 bytes).
+
+| Key | Type | Auto-scale formula | Floor | Ceiling | Description |
+|-----|------|--------------------|-------|---------|-------------|
+| `dns_cache_entries` | integer | `ram_mb × 250` | `10 000` | `500 000` | Max entries in the DNS response cache. Evicts entries closest to expiry first. |
+| `ns_cache_entries` | integer | `ram_mb × 50` | `2 000` | `100 000` | Max entries in the per-zone NS+glue cache used by the iterative resolver. |
+| `udp_max_inflight` | integer | `cpu × 512` | `1 024` | `16 384` | Concurrent in-flight UDP query tasks. Packets are dropped when exceeded. |
+| `tcp_max_connections` | integer | `cpu × 128` | `512` | `8 192` | Concurrent plain-TCP DNS connections. New connections are dropped when exceeded. |
+| `dot_max_connections` | integer | `cpu × 128` | `512` | `8 192` | Concurrent DNS-over-TLS connections. |
+| `doh_max_connections` | integer | `cpu × 128` | `512` | `8 192` | Concurrent DNS-over-HTTPS connections. |
+| `doq_max_streams_per_connection` | integer | `cpu × 16` | `64` | `512` | Max concurrent bidirectional streams per DoQ connection (enforced via QUIC transport parameters — RFC 9250 §7). |
+| `blocklist_max_mb` | integer | `ram_mb ÷ 8` | `50` | `500` | Max size (MB) of a single downloaded or on-disk blocklist. Sources that exceed this are refused. |
+| `web_upload_max_mb` | integer | `ram_mb ÷ 64` | `2` | `50` | Max size (MB) for web-admin uploads (TLS cert / key / PKCS#12 bundles). |
+
+Example — a tiny VPS where you want a smaller cache and stricter upload cap:
+
+```toml
+[limits]
+dns_cache_entries = 50000
+web_upload_max_mb = 5
+# Everything else auto-scales.
+```
+
+Example — a high-traffic server that wants to lift every cap:
+
+```toml
+[limits]
+dns_cache_entries = 500000
+udp_max_inflight = 16384
+tcp_max_connections = 8192
+dot_max_connections = 8192
+doh_max_connections = 8192
+doq_max_streams_per_connection = 512
+blocklist_max_mb = 500
+web_upload_max_mb = 50
+```
+
 ### Full example
 
 A fully-populated `config.toml` for reference (all values shown are defaults unless noted):
@@ -524,6 +573,17 @@ release_channel = "stable"
 query_log_retention_days = 7
 stats_retention_days = 90
 anonymize_client_ip = false
+
+# [limits]  — every key is optional; unset keys auto-scale from detected hardware.
+# dns_cache_entries = 100000
+# ns_cache_entries = 10000
+# udp_max_inflight = 1024
+# tcp_max_connections = 512
+# dot_max_connections = 512
+# doh_max_connections = 512
+# doq_max_streams_per_connection = 128
+# blocklist_max_mb = 100
+# web_upload_max_mb = 10
 ```
 
 ## Command-line options

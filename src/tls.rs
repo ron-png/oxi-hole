@@ -78,8 +78,12 @@ fn default_quic_transport() -> quinn::TransportConfig {
     transport.max_idle_timeout(Some(
         quinn::IdleTimeout::try_from(std::time::Duration::from_secs(30)).unwrap(),
     ));
-    // RFC 9250 §7: limit concurrent streams to protect against resource exhaustion
-    transport.max_concurrent_bidi_streams(quinn::VarInt::from_u32(128));
+    // RFC 9250 §7: limit concurrent streams to protect against resource exhaustion.
+    // Cap scales with detected hardware; operators can override via [limits].
+    let streams = crate::resources::limits().doq_max_streams_per_connection;
+    transport.max_concurrent_bidi_streams(
+        quinn::VarInt::from_u64(streams).unwrap_or(quinn::VarInt::from_u32(128)),
+    );
     transport
 }
 

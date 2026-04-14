@@ -14,9 +14,6 @@ use tokio::sync::RwLock;
 use tokio_rustls::TlsAcceptor;
 use tracing::{debug, error, info, warn};
 
-/// Maximum concurrent DoT connections (RFC 7858 §3.4 recommends limiting).
-const MAX_DOT_CONNECTIONS: usize = 512;
-
 /// Idle timeout for DoT connections in seconds (RFC 7858 §3.4).
 const DOT_IDLE_TIMEOUT_SECS: u64 = 30;
 
@@ -57,7 +54,11 @@ pub async fn run(
     let listener = TcpListener::from_std(std_listener)?;
     let acceptor = TlsAcceptor::from(tls_config);
     let active_connections = Arc::new(AtomicUsize::new(0));
-    info!("DoT listener ready on {}", addr);
+    let max_connections = crate::resources::limits().dot_max_connections;
+    info!(
+        "DoT listener ready on {} (max {} concurrent connections)",
+        addr, max_connections
+    );
 
     loop {
         let (tcp_stream, peer) = match listener.accept().await {
@@ -73,11 +74,11 @@ pub async fn run(
         // all see count < MAX and all pass the guard.
         let conn_count = active_connections.clone();
         let prev = conn_count.fetch_add(1, Ordering::AcqRel);
-        if prev >= MAX_DOT_CONNECTIONS {
+        if prev >= max_connections {
             conn_count.fetch_sub(1, Ordering::AcqRel);
             warn!(
                 "DoT connection limit reached ({}), rejecting {}",
-                MAX_DOT_CONNECTIONS, peer
+                max_connections, peer
             );
             drop(tcp_stream);
             continue;

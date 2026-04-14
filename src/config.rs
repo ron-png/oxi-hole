@@ -45,6 +45,41 @@ pub struct Config {
     pub system: SystemConfig,
     #[serde(default)]
     pub log: LogConfig,
+    #[serde(default)]
+    pub limits: LimitsConfig,
+}
+
+/// Operator overrides for hardware-adaptive resource limits.
+/// Every field is optional — unset fields use values computed from detected CPU/RAM.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct LimitsConfig {
+    /// Max entries in the DNS response cache.
+    #[serde(default)]
+    pub dns_cache_entries: Option<usize>,
+    /// Max entries in the per-zone NS (delegation) cache used by the iterative resolver.
+    #[serde(default)]
+    pub ns_cache_entries: Option<usize>,
+    /// Max concurrent in-flight UDP query tasks (semaphore cap).
+    #[serde(default)]
+    pub udp_max_inflight: Option<usize>,
+    /// Max concurrent plain-TCP DNS connections.
+    #[serde(default)]
+    pub tcp_max_connections: Option<usize>,
+    /// Max concurrent DNS-over-TLS connections.
+    #[serde(default)]
+    pub dot_max_connections: Option<usize>,
+    /// Max concurrent DNS-over-HTTPS connections.
+    #[serde(default)]
+    pub doh_max_connections: Option<usize>,
+    /// Max concurrent bidirectional streams per DoQ connection.
+    #[serde(default)]
+    pub doq_max_streams_per_connection: Option<u64>,
+    /// Max size for a single downloaded blocklist, in MB.
+    #[serde(default)]
+    pub blocklist_max_mb: Option<usize>,
+    /// Max size for a single web-admin upload (cert/key/p12), in MB.
+    #[serde(default)]
+    pub web_upload_max_mb: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -416,6 +451,7 @@ impl Default for Config {
             tls: TlsConfig::default(),
             system: SystemConfig::default(),
             log: LogConfig::default(),
+            limits: LimitsConfig::default(),
         }
     }
 }

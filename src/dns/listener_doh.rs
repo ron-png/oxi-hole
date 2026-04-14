@@ -13,13 +13,13 @@ use axum::Router;
 use base64::Engine;
 use hickory_proto::op::ResponseCode;
 use serde::Deserialize;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use tokio::net::TcpListener;
 use tokio::sync::RwLock;
 use tokio_rustls::TlsAcceptor;
 use tower_service::Service;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 fn bind_tcp_reuse_port(addr: &str) -> anyhow::Result<std::net::TcpListener> {
     use socket2::{Domain, Protocol, Socket, Type};
@@ -80,7 +80,12 @@ pub async fn run(
     let std_listener = bind_tcp_reuse_port(&addr)?;
     let tcp_listener = TcpListener::from_std(std_listener)?;
     let acceptor = TlsAcceptor::from(tls_config);
-    info!("DoH listener ready on https://{}/dns-query", addr);
+    let active_connections = Arc::new(AtomicUsize::new(0));
+    let max_connections = crate::resources::limits().doh_max_connections;
+    info!(
+        "DoH listener ready on https://{}/dns-query (max {} concurrent connections)",
+        addr, max_connections
+    );
 
     loop {
         let (tcp_stream, peer) = match tcp_listener.accept().await {
@@ -90,6 +95,19 @@ pub async fn run(
                 continue;
             }
         };
+
+        // Connection cap: increment first then test to avoid TOCTOU races.
+        let conn_count = active_connections.clone();
+        let prev = conn_count.fetch_add(1, Ordering::AcqRel);
+        if prev >= max_connections {
+            conn_count.fetch_sub(1, Ordering::AcqRel);
+            warn!(
+                "DoH connection limit reached ({}), rejecting {}",
+                max_connections, peer
+            );
+            drop(tcp_stream);
+            continue;
+        }
 
         let acceptor = acceptor.clone();
         let app = app.clone();
@@ -129,6 +147,7 @@ pub async fn run(
             {
                 debug!("DoH connection error from {}: {}", peer, e);
             }
+            conn_count.fetch_sub(1, Ordering::AcqRel);
         });
     }
 }
@@ -220,9 +239,11 @@ async fn doh_post(State(state): State<DohState>, req: axum::extract::Request) ->
             .into_response();
     }
 
+    // RFC 8484 §6: DNS-over-HTTPS messages are bounded by DNS message size
+    // (~64KB max). Cap here so a rogue client can't stream MB of junk.
     let body = match axum::body::to_bytes(req.into_body(), 65535).await {
         Ok(b) => b,
-        Err(_) => return (StatusCode::BAD_REQUEST, "Failed to read body").into_response(),
+        Err(_) => return (StatusCode::PAYLOAD_TOO_LARGE, "body too large").into_response(),
     };
 
     match handler::process_dns_query(
