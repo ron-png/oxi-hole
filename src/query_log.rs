@@ -470,6 +470,9 @@ impl QueryLog {
                 // then reattach.
                 conn.execute_batch("DETACH DATABASE archive;")?;
                 conn.execute_batch("VACUUM;")?;
+                // Truncate the WAL so the on-disk size reflects the post-VACUUM
+                // state immediately.
+                let _ = conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);");
                 conn.execute_batch(&format!(
                     "ATTACH DATABASE '{}' AS archive;",
                     archive_path.display()
@@ -543,6 +546,11 @@ impl QueryLog {
             // Reset AUTOINCREMENT so the next inserted row starts at id 1 again.
             let _ = conn.execute("DELETE FROM sqlite_sequence WHERE name='query_log'", []);
             conn.execute_batch("VACUUM;")?;
+            // Truncate the WAL so the on-disk file sizes reflect the cleared
+            // state immediately — without this the main `.db` can stay
+            // multi-MB until the next natural checkpoint and operators
+            // reasonably conclude nothing happened.
+            let _ = conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);");
             Ok(())
         })
         .await?;
@@ -593,6 +601,7 @@ impl QueryLog {
                 let deleted =
                     conn.execute("DELETE FROM query_log WHERE id < ?1", params![cutoff_id])? as u64;
                 conn.execute_batch("VACUUM;")?;
+                let _ = conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);");
                 Ok(deleted)
             })
             .await?;
