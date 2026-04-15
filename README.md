@@ -1255,7 +1255,9 @@ Please note that this list is not a promise, rather thoughts I might change my m
   - including all the feaures that are not essential for the DNS server to run. (like statistics, logs, etc.)
   - this should be done in a way that the server can still run without the API.
   - the API should be able to be started and stopped independently of the DNS server.
-- encrypted config download 
+- encrypted config download
+- pre-reload cached entries to speed up dns responses to the client
+  - if the cache entry limit is reached, delete the least used one
 - purge all dead code
 
 ### Stuff that might be done
