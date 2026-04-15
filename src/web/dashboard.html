@@ -5360,8 +5360,7 @@
 
         // Ordered list: key, human label, unit, optional hint shown under the label.
         const LIMIT_FIELDS = [
-            ['dns_cache_entries',              'DNS response cache',        'entries',  'Domain→answer cache'],
-            ['ns_cache_entries',               'NS cache',                  'entries',  'Per-zone delegation cache'],
+            ['dns_cache_entries',              'DNS response cache',        'entries',  'Domain→answer cache (also caps the NS delegation cache)'],
             ['udp_max_inflight',               'UDP in-flight queries',     'tasks',    'Concurrent UDP handlers'],
             ['tcp_max_connections',            'TCP connections',           'conns',    'Concurrent plain-TCP DNS'],
             ['dot_max_connections',            'DoT connections',           'conns',    'Concurrent DNS-over-TLS'],

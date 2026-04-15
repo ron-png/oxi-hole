@@ -161,9 +161,17 @@ pub fn compute(hw: &HardwareProfile, cfg: &LimitsConfig) -> ResourceLimits {
         stats_rotate_bytes: 512 * MB,
     };
 
+    let dns_cache_entries = cfg.dns_cache_entries.unwrap_or(auto.dns_cache_entries);
+    // The NS cache is bounded by the response cache: a user who shrinks
+    // the response cache shouldn't end up with a larger delegation cache.
+    let ns_cache_entries = cfg
+        .ns_cache_entries
+        .unwrap_or(auto.ns_cache_entries)
+        .min(dns_cache_entries);
+
     ResourceLimits {
-        dns_cache_entries: cfg.dns_cache_entries.unwrap_or(auto.dns_cache_entries),
-        ns_cache_entries: cfg.ns_cache_entries.unwrap_or(auto.ns_cache_entries),
+        dns_cache_entries,
+        ns_cache_entries,
         udp_max_inflight: cfg.udp_max_inflight.unwrap_or(auto.udp_max_inflight),
         tcp_max_connections: cfg.tcp_max_connections.unwrap_or(auto.tcp_max_connections),
         dot_max_connections: cfg.dot_max_connections.unwrap_or(auto.dot_max_connections),
@@ -228,6 +236,28 @@ mod tests {
         assert!(limits.dns_cache_entries >= 10_000);
         assert!(limits.tcp_max_connections >= 512);
         assert!(limits.udp_max_inflight >= 1_024);
+    }
+
+    #[test]
+    fn ns_cache_never_exceeds_response_cache() {
+        // Shrink the response cache via override; auto NS cache would otherwise
+        // stay at 100_000 on a big box and dwarf it.
+        let cfg = LimitsConfig {
+            dns_cache_entries: Some(5_000),
+            ..Default::default()
+        };
+        let limits = compute(&hw(32, 65536), &cfg);
+        assert_eq!(limits.dns_cache_entries, 5_000);
+        assert!(limits.ns_cache_entries <= limits.dns_cache_entries);
+
+        // Explicit NS override above the response cache is also clamped.
+        let cfg = LimitsConfig {
+            dns_cache_entries: Some(10_000),
+            ns_cache_entries: Some(90_000),
+            ..Default::default()
+        };
+        let limits = compute(&hw(4, 2048), &cfg);
+        assert_eq!(limits.ns_cache_entries, 10_000);
     }
 
     #[test]
