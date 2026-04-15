@@ -8,7 +8,8 @@ Supports plain DNS (UDP), DNS-over-TLS (DoT), DNS-over-HTTPS (DoH), and DNS-over
 > **This is a young project** - If you're looking for a more battle-tested solution, check out [AdGuard Home](https://github.com/AdguardTeam/AdGuardHome).
 
 
-<img width="934" height="881" alt="SCR-20260402-pajz" src="https://github.com/user-attachments/assets/ba57edf1-308a-49bd-8f1c-0191a32d6939" />
+<img width="928" height="878" alt="image" src="https://github.com/user-attachments/assets/acb8d9fd-0c14-4f79-93dd-58928f5bace5" />
+
 
 
 
@@ -1208,6 +1209,8 @@ Bug reports, feature requests, and pull requests are welcome. Open an issue on G
 Please note that this list is not a promise, rather thoughts I might change my mind on in the future. Feel free to share your opinion and suggestions for the future of this project.
 
 ### Goals for Version 1:
+- the user should not have to define the type of list they are adding. The list handler should be able to handle lists that have allow, blocks and rewrites in one list.
+  - in addition, there should be two additional panels besides "domains on blocklists": 1. Allowed domains 2. DNS rewrites
 - When enabling DoH, the user should be able to define the https request path (feature)
   - make sure that the path is not used by any other service on the same server.
 - if the user wants a different subdomain for DoH, DoT and DoQ, the user should be able to define it in the UI (feature)
@@ -1252,7 +1255,9 @@ Please note that this list is not a promise, rather thoughts I might change my m
   - including all the feaures that are not essential for the DNS server to run. (like statistics, logs, etc.)
   - this should be done in a way that the server can still run without the API.
   - the API should be able to be started and stopped independently of the DNS server.
-- encrypted config download 
+- encrypted config download
+- pre-reload cached entries to speed up dns responses to the client
+  - if the cache entry limit is reached, delete the least used one
 - purge all dead code
 
 ### Stuff that might be done
