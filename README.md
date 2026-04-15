@@ -1209,6 +1209,8 @@ Bug reports, feature requests, and pull requests are welcome. Open an issue on G
 Please note that this list is not a promise, rather thoughts I might change my mind on in the future. Feel free to share your opinion and suggestions for the future of this project.
 
 ### Goals for Version 1:
+- the user should not have to define the type of list they are adding. The list handler should be able to handle lists that have allow, blocks and rewrites in one list.
+  - in addition, there should be two additional panels besides "domains on blocklists": 1. Allowed domains 2. DNS rewrites
 - When enabling DoH, the user should be able to define the https request path (feature)
   - make sure that the path is not used by any other service on the same server.
 - if the user wants a different subdomain for DoH, DoT and DoQ, the user should be able to define it in the UI (feature)
