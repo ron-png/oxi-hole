@@ -1608,6 +1608,8 @@ struct StatsResponse {
     blocked_queries: u64,
     block_percentage: f64,
     blocklist_size: usize,
+    allowlist_size: usize,
+    rewrite_size: usize,
     blocking_enabled: bool,
 }
 
@@ -1617,6 +1619,8 @@ async fn api_stats(State(state): State<AppState>) -> Json<StatsResponse> {
         blocked_queries: state.stats.blocked_queries(),
         block_percentage: state.stats.block_percentage(),
         blocklist_size: state.blocklist.blocked_count().await,
+        allowlist_size: state.blocklist.allowed_count().await,
+        rewrite_size: state.blocklist.rewrite_count().await,
         blocking_enabled: state.blocklist.is_enabled().await,
     })
 }
@@ -1884,19 +1888,32 @@ async fn api_remove_allowlisted(
 
 // ==================== External Lists ====================
 
-async fn api_blocklist_sources(
-    State(state): State<AppState>,
-) -> Json<Vec<crate::blocklist::SourceEntry>> {
-    Json(state.blocklist.get_sources().await)
+#[derive(Serialize)]
+struct SourceRow {
+    url: String,
+    blocked: usize,
+    allowed: usize,
+    rewrites: usize,
+}
+
+async fn api_blocklist_sources(State(state): State<AppState>) -> Json<Vec<SourceRow>> {
+    let sources = state.blocklist.get_sources().await;
+    let mut rows = Vec::with_capacity(sources.len());
+    for s in sources {
+        let c = state.blocklist.source_counts(&s.url).await;
+        rows.push(SourceRow {
+            url: s.url,
+            blocked: c.blocked,
+            allowed: c.allowed,
+            rewrites: c.rewrites,
+        });
+    }
+    Json(rows)
 }
 
 #[derive(Deserialize)]
 struct UrlRequest {
     url: String,
-    /// Source kind: "block", "allow", or "rewrite".  Defaults to "block"
-    /// for back-compat with UI/clients that predate typed sources.
-    #[serde(default)]
-    kind: Option<crate::blocklist::SourceKind>,
 }
 
 #[derive(Serialize)]
@@ -1929,18 +1946,30 @@ async fn api_add_blocklist_source(
             message: "URLs pointing to internal or private addresses are not allowed".to_string(),
         }));
     }
-    let kind = req.kind.unwrap_or(crate::blocklist::SourceKind::Block);
-    match state.blocklist.add_source(&req.url, kind).await {
-        Ok(count) => {
+    match state.blocklist.add_source(&req.url).await {
+        Ok(counts) => {
             info!(
-                "Added source: {} (kind={:?}, {} entries)",
-                req.url, kind, count
+                "Added source: {} ({} block, {} allow, {} rewrite)",
+                req.url, counts.blocked, counts.allowed, counts.rewrites
             );
             state.upstream.cache_flush();
             state.save_config().await;
+            let message = match (counts.blocked, counts.allowed, counts.rewrites) {
+                (0, 0, 0) => "List fetched but contained no usable entries".to_string(),
+                (b, 0, 0) => format!("Loaded {} block entries", b),
+                (0, a, 0) => format!("Loaded {} allow entries", a),
+                (0, 0, r) => format!("Loaded {} rewrite rules", r),
+                (b, a, r) => format!(
+                    "Loaded {} entries ({} block, {} allow, {} rewrites)",
+                    counts.total(),
+                    b,
+                    a,
+                    r
+                ),
+            };
             Ok(Json(BlocklistAddResponse {
                 success: true,
-                message: format!("Loaded {} entries", count),
+                message,
             }))
         }
         Err(e) => Ok(Json(BlocklistAddResponse {

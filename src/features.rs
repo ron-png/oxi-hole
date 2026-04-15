@@ -1,4 +1,4 @@
-use crate::blocklist::{BlocklistManager, RewriteTarget, SourceKind};
+use crate::blocklist::{BlocklistManager, RewriteTarget};
 use crate::dns::upstream::UpstreamForwarder;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -35,19 +35,18 @@ pub fn url_to_feature_id(url: &str) -> Option<&'static str> {
 pub type SafeSearchTarget = RewriteTarget;
 
 /// Feature definition — a named toggle with an optional external list URL.
-/// `blocklist_url` is a Block-kind source; `rewrite_list_url` is a
-/// Rewrite-kind source.  A feature can attach either, neither, or (in
-/// principle) both.
+/// The list is parsed per-line (blocks / allows / rewrites) just like any
+/// user-added source.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FeatureDefinition {
     pub id: String,
     pub name: String,
     pub description: String,
     pub icon: String,
+    /// External list URL attached to this feature.  None for toggles that
+    /// don't touch the source pool (e.g. root_servers).
     #[serde(default)]
-    pub blocklist_url: Option<String>,
-    #[serde(default)]
-    pub rewrite_list_url: Option<String>,
+    pub list_url: Option<String>,
     pub enabled: bool,
 }
 
@@ -69,8 +68,7 @@ impl FeatureManager {
                 name: "Block Ads, Malware & Trackers".to_string(),
                 description: "Blocks advertising, malware, and tracking domains using a comprehensive blocklist.".to_string(),
                 icon: "shield".to_string(),
-                blocklist_url: Some(BLOCKLIST_ADS_MALWARE.to_string()),
-                rewrite_list_url: None,
+                list_url: Some(BLOCKLIST_ADS_MALWARE.to_string()),
                 enabled: false,
             },
             FeatureDefinition {
@@ -78,8 +76,7 @@ impl FeatureManager {
                 name: "Block NSFW Content".to_string(),
                 description: "Blocks adult and explicit content domains using the OISD NSFW list.".to_string(),
                 icon: "eye-off".to_string(),
-                blocklist_url: Some(BLOCKLIST_NSFW.to_string()),
-                rewrite_list_url: None,
+                list_url: Some(BLOCKLIST_NSFW.to_string()),
                 enabled: false,
             },
             FeatureDefinition {
@@ -87,8 +84,7 @@ impl FeatureManager {
                 name: "Enforce Safe Search".to_string(),
                 description: "Forces safe search on Google, Bing, and DuckDuckGo via DNS.".to_string(),
                 icon: "search".to_string(),
-                blocklist_url: None,
-                rewrite_list_url: Some(SAFE_SEARCH_LIST_URL.to_string()),
+                list_url: Some(SAFE_SEARCH_LIST_URL.to_string()),
                 enabled: false,
             },
             FeatureDefinition {
@@ -96,8 +92,7 @@ impl FeatureManager {
                 name: "YouTube Restricted Mode".to_string(),
                 description: "Enforces YouTube restricted mode via DNS rewriting.".to_string(),
                 icon: "search".to_string(),
-                blocklist_url: None,
-                rewrite_list_url: Some(YOUTUBE_SAFE_SEARCH_LIST_URL.to_string()),
+                list_url: Some(YOUTUBE_SAFE_SEARCH_LIST_URL.to_string()),
                 enabled: false,
             },
             FeatureDefinition {
@@ -105,8 +100,7 @@ impl FeatureManager {
                 name: "Use Root DNS Servers".to_string(),
                 description: "Resolve domains directly via root servers instead of third-party resolvers. Maximum privacy — no upstream sees all your queries.".to_string(),
                 icon: "globe".to_string(),
-                blocklist_url: None,
-                rewrite_list_url: None,
+                list_url: None,
                 enabled: false,
             },
         ];
@@ -127,12 +121,13 @@ impl FeatureManager {
         self.features.read().await.clone()
     }
 
-    /// Toggle a feature on/off.  Attaches or detaches the feature's list
-    /// sources — block, rewrite, or both — on the shared BlocklistManager.
+    /// Toggle a feature on/off.  Attaches or detaches the feature's list URL
+    /// on the shared BlocklistManager.  The parser classifies each line
+    /// per-entry, so there's no "kind" to pick.
     pub async fn set_feature(&self, feature_id: &str, enabled: bool) {
-        // Update the feature's in-memory state and capture the URLs to
-        // act on.  No write lock held past this scope.
-        let (blocklist_url, rewrite_url, name) = {
+        // Update the feature's in-memory state and capture the URL to act
+        // on.  No write lock held past this scope.
+        let (list_url, name) = {
             let mut features = self.features.write().await;
             let feature = match features.iter_mut().find(|f| f.id == feature_id) {
                 Some(f) => f,
@@ -145,11 +140,7 @@ impl FeatureManager {
                 return;
             }
             feature.enabled = enabled;
-            (
-                feature.blocklist_url.clone(),
-                feature.rewrite_list_url.clone(),
-                feature.name.clone(),
-            )
+            (feature.list_url.clone(), feature.name.clone())
         };
 
         // Root-servers is special-cased: no external list, just a flag on
@@ -173,27 +164,11 @@ impl FeatureManager {
             info!("Disabling feature '{}'", name);
         }
 
-        // Block-kind source (ads, nsfw).
-        if let Some(url) = blocklist_url {
+        if let Some(url) = list_url {
             if enabled {
-                if let Err(e) = self.blocklist.add_source(&url, SourceKind::Block).await {
+                if let Err(e) = self.blocklist.add_source(&url).await {
                     warn!("{}: {}", name, e);
                     // Revert feature state so the UI reflects reality.
-                    let mut features = self.features.write().await;
-                    if let Some(f) = features.iter_mut().find(|f| f.id == feature_id) {
-                        f.enabled = false;
-                    }
-                }
-            } else {
-                self.blocklist.remove_source(&url).await;
-            }
-        }
-
-        // Rewrite-kind source (safe_search, youtube_safe_search).
-        if let Some(url) = rewrite_url {
-            if enabled {
-                if let Err(e) = self.blocklist.add_source(&url, SourceKind::Rewrite).await {
-                    warn!("{}: {}", name, e);
                     let mut features = self.features.write().await;
                     if let Some(f) = features.iter_mut().find(|f| f.id == feature_id) {
                         f.enabled = false;
