@@ -1211,6 +1211,7 @@ Please note that this list is not a promise, rather thoughts I might change my m
 ### Goals for Version 1:
 - When enabling DoH, the user should be able to define the https request path (feature)
   - make sure that the path is not used by any other service on the same server.
+- show a list of the available hosts/links/ips to the user, so that he can configure his client.
 - if the user wants a different subdomain for DoH, DoT and DoQ, the user should be able to define it in the UI (feature)
   - this should include the ability that the server automatically creates the needed certificates for the subdomain (if not already covered by wildcard certificate).
   - if the subdomain doesn't exist in the DNS zone, the server should create a DNS A (and if enabled AAAA) record for the subdomain pointing to the server's IP address.
@@ -1244,7 +1245,7 @@ Please note that this list is not a promise, rather thoughts I might change my m
 - make the log entries clickable and show more information about the query
 - sort logs by ...
 - add to the logs the type of request (dot, doh, dns, etc.)
-- dns rewrites
+- custom dns rewrites, not only from lists, do it like blocking or allowing a single domain
 - ability to disable the Web UI (feature)
   - including all the feaures that are not essential for the DNS server to run. (like statistics, logs, etc.)
   - this should be done in a way that the server can still run without the Web UI.
@@ -1256,7 +1257,30 @@ Please note that this list is not a promise, rather thoughts I might change my m
 - encrypted config download
 - pre-reload cached entries to speed up dns responses to the client
   - if the cache entry limit is reached, delete the least used one
+- stytistics: when hovering over the bars, show the exact number of queries.
 - purge all dead code
+
+### Goals for Version 4:
+- A public serving Website on the 443 and as default port
+  - should show the Information on how to use the DNS server for the client.
+  - show all the options to configure the DNS server for the client.
+    - especially show the dns addresses.
+    - if a certificate is used, only show the ip address for plain dns. 
+    - the other protocols should show the hostname.
+      - for https, it should be the complete path.
+  - show non critical information about the server.
+    - like version, statistics, etc.
+    - show the logs as well, but only the last 10 entries.
+     - Auto refresh the logs by default. 
+     - Ip addresses should be hidden. 
+  - ultimately, the admin should be able to decide what information is shown on the public website, but give a default configuration and a lot of options to configure it.
+- The user should be able to configure whether the public website is shown or not. (feature)
+- The user should be able to configure the port of the public website. (feature)
+- The user should be able to configure the path of the public website. (feature)
+- The user should be able to configure the hostname of the public website. (feature)
+- purge all dead code
+
+  
 
 ### Stuff that might be done
 - Look into RFC Compliance
